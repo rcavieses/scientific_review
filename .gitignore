@@ -72,3 +72,4 @@ anthropic-apikey
 *.csv
 *.log
 sciencedirect_apikey.txt
+/outputs
