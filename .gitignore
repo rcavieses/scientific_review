@@ -69,3 +69,5 @@ secrets/
 anthropic-api-key.txt
 *.txt
 *.json
+*.csv
+*.log
