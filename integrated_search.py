@@ -189,6 +189,7 @@ def integrate_search_results(
     sciencedirect_results: str,
     crossref_results: str,
     semanticscholar_results: str,
+    google_scholar_results: str,
     sciencedirect_abstracts: str,
     crossref_abstracts: str,
     semanticscholar_abstracts: str,
@@ -202,6 +203,7 @@ def integrate_search_results(
         sciencedirect_results: Ruta al archivo de resultados de Science Direct.
         crossref_results: Ruta al archivo de resultados de Crossref.
         semanticscholar_results: Ruta al archivo de resultados de Semantic Scholar.
+        google_scholar_results: Ruta al archivo de resultados de Google Scholar.
         sciencedirect_abstracts: Ruta al archivo de resúmenes de Science Direct.
         crossref_abstracts: Ruta al archivo de resúmenes de Crossref.
         semanticscholar_abstracts: Ruta al archivo de resúmenes de Semantic Scholar.
@@ -217,7 +219,8 @@ def integrate_search_results(
         results_files = {
             "Science Direct": sciencedirect_results,
             "Crossref": crossref_results,
-            "Semantic Scholar": semanticscholar_results
+            "Semantic Scholar": semanticscholar_results,
+            "Google Scholar": google_scholar_results  
         }
         
         all_results = load_results(results_files)
@@ -284,6 +287,7 @@ if __name__ == "__main__":
         sciencedirect_results="outputs/sciencedirect_results.json",
         crossref_results="outputs/crossref_results.json",
         semanticscholar_results="outputs/semanticscholar_results.json",
+        google_scholar_results="outputs/googlescholar_results.json",
         sciencedirect_abstracts="outputs/sciencedirect_abstracts.json",
         crossref_abstracts="outputs/crossref_abstracts.json",
         semanticscholar_abstracts="outputs/semanticscholar_abstracts.json",

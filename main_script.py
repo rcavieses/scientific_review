@@ -36,7 +36,8 @@ required_scripts = [
     "semantic_scholar_search.py",
     "integrated_search.py",
     "domain_analysis.py",
-    "nlp_classifier_anthropic.py"
+    "nlp_classifier_anthropic.py",
+    "google_scholar_scraper.py"  # Add this line
 ]
 
 def check_required_files(files_list: List[str]) -> None:
@@ -105,7 +106,8 @@ def run_search_pipeline(
     skip_searches: bool = False,
     skip_integration: bool = False,
     skip_domain_analysis: bool = False,
-    skip_classification: bool = False
+    skip_classification: bool = False,
+    skip_google_scholar: bool = False
 ) -> None:
     """
     Ejecuta el pipeline completo de búsqueda, integración, análisis y clasificación.
@@ -127,6 +129,7 @@ def run_search_pipeline(
         skip_integration: Si es True, omite la integración de resultados.
         skip_domain_analysis: Si es True, omite el análisis de dominios.
         skip_classification: Si es True, omite la clasificación con Claude.
+        skip_google_scholar: Si es True, omite la búsqueda en Google Scholar.
     """
     start_time = time.time()
     
@@ -181,6 +184,27 @@ def run_search_pipeline(
             year_start=year_start,
             year_end=year_end
         )
+
+        # 2.4 Google Scholar
+        if not skip_searches and not skip_google_scholar:
+            print("\n----- Búsqueda en Google Scholar -----\n")
+            try:
+                from google_scholar_scraper import run_google_scholar_search
+                run_google_scholar_search(
+                    domain1_terms=domain1_terms,
+                    domain2_terms=domain2_terms,
+                    domain3_terms=domain3_terms,
+                    output_file="google_scholar_results.json",  # Fix path
+                    integrated_results_file=None,
+                    max_results=max_results,
+                    year_start=year_start,
+                    year_end=year_end,
+                    always_integrate=False,
+                    use_proxy=True  # Add proxy parameter
+                )
+            except Exception as e:
+                print(f"ERROR: No se pudo ejecutar la búsqueda en Google Scholar: {str(e)}")
+                print("Se continuará con el resto del proceso.")
     else:
         print("\nSe omitió la ejecución de búsquedas por indicación del usuario.")
     
@@ -191,6 +215,7 @@ def run_search_pipeline(
             sciencedirect_results="outputs/sciencedirect_results.json",
             crossref_results="outputs/crossref_results.json",
             semanticscholar_results="outputs/semanticscholar_results.json",
+            google_scholar_results="outputs/google_scholar_results.json" if not skip_google_scholar else None,
             sciencedirect_abstracts="outputs/sciencedirect_abstracts.json",
             crossref_abstracts="outputs/crossref_abstracts.json",
             semanticscholar_abstracts="outputs/semanticscholar_abstracts.json",
@@ -199,22 +224,29 @@ def run_search_pipeline(
         )
     else:
         print("\nSe omitió la integración de resultados por indicación del usuario.")
+
     
     # 4. Analizar dominios
-    if not skip_domain_analysis:
-        print("\n====== INICIANDO ANÁLISIS DE DOMINIOS ======\n")
-        run_domain_analysis(
-            input_file="outputs/integrated_results.json",
-            output_results_file="outputs/domain_analyzed_results.json",
-            output_stats_file="outputs/domain_statistics.csv",
-            domain1_terms=domain1_terms,
-            domain2_terms=domain2_terms,
-            domain3_terms=domain3_terms,
-            domain_names=domain_names
-        )
-    else:
-        print("\nSe omitió el análisis de dominios por indicación del usuario.")
-    
+    if not skip_searches and not skip_google_scholar:
+        print("\n----- Búsqueda en Google Scholar -----\n")
+        try:
+            from google_scholar_scraper import run_google_scholar_search
+            run_google_scholar_search(
+                domain1_terms=domain1_terms,
+                domain2_terms=domain2_terms,
+                domain3_terms=domain3_terms,
+                output_file="outputs/google_scholar_results.json",
+                integrated_results_file=None,  # No integrar aquí, lo haremos después con todas las fuentes
+                max_results=max_results,
+                year_start=year_start,
+                year_end=year_end,
+                always_integrate=False,  # No integrar dentro de la función, sino después con el resto
+                use_proxy=True
+            )
+        except Exception as e:
+            print(f"ERROR: No se pudo ejecutar la búsqueda en Google Scholar: {str(e)}")
+            print("Se continuará con el resto del proceso.")
+        
     # 5. Clasificar con Anthropic Claude
     if not skip_classification:
         print("\n====== INICIANDO CLASIFICACIÓN CON ANTHROPIC CLAUDE ======\n")
@@ -307,6 +339,8 @@ def main():
                         help='Omitir la clasificación con Claude')
     parser.add_argument('--parallel-classification', action='store_true',
                         help='Usar clasificación en paralelo en lugar de secuencial')
+    parser.add_argument('--skip-google-scholar', action='store_true',
+                        help='Omitir la búsqueda en Google Scholar')
     
     # Parsear argumentos
     args = parser.parse_args()
@@ -357,7 +391,8 @@ def main():
         skip_searches=args.skip_searches,
         skip_integration=args.skip_integration,
         skip_domain_analysis=args.skip_domain_analysis,
-        skip_classification=args.skip_classification
+        skip_classification=args.skip_classification,
+        skip_google_scholar=args.skip_google_scholar
     )
 
 

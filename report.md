@@ -1,6 +1,6 @@
 # Análisis Bibliométrico
 
-**Fecha del informe:** 27 de March de 2025
+**Fecha del informe:** 01 de April de 2025
 
 ---
 ## Resumen de Fuentes
@@ -17,10 +17,10 @@ Los artículos analizados en este informe provienen de las siguientes fuentes:
 
 ## Introducción
 
-Este informe presenta las visualizaciones generadas a partir del análisis bibliométrico.
-Cada figura está acompañada de una breve descripción.
+    Este informe presenta las visualizaciones generadas a partir del análisis bibliométrico.
+    Cada figura está acompañada de una breve descripción.
 
-
+    
 
 ## Visualizaciones del Análisis
 
@@ -70,7 +70,7 @@ Ilustra el solapamiento entre diferentes dominios o áreas temáticas.
 
 ![Source Distribution](figures\source_distribution.png)
 
-Muestra la distribución de artículos por fuente de datos (Crossref, Semantic Scholar, Science Direct/Scopus).
+Muestra la distribución de artículos por fuente de datos (Crossref, Semantic Scholar, Science Direct/Scopus y Google Scholar).
 
 ### Análisis de Contenido
 

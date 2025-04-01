@@ -145,6 +145,10 @@ class GenericReportGenerator:
             for source, count in source_counts.items():
                 header += f"- **{source}**: {count} artículos\n"
             
+            # Verificar si hay artículos de Google Scholar
+            if 'Google Scholar' in source_counts and source_counts['Google Scholar'] > 0:
+                header += f"\n**Nota**: Los {source_counts['Google Scholar']} artículos de Google Scholar fueron integrados con el resto de resultados.\n"
+            
             header += f"\n**Total de artículos**: {self.stats.get('total_articles', 'N/A')}\n\n"
             header += "---\n\n"
         
@@ -154,10 +158,10 @@ class GenericReportGenerator:
         else:
             header += """## Introducción
 
-Este informe presenta las visualizaciones generadas a partir del análisis bibliométrico.
-Cada figura está acompañada de una breve descripción.
+    Este informe presenta las visualizaciones generadas a partir del análisis bibliométrico.
+    Cada figura está acompañada de una breve descripción.
 
-"""
+    """
         return header
     
     def _generate_figures_section(self) -> str:
@@ -250,13 +254,17 @@ Cada figura está acompañada de una breve descripción.
         elif 'domain_distribution' in fig_lower:
             return "Representa la distribución de publicaciones entre los diferentes dominios o áreas temáticas."
         elif 'source_distribution' in fig_lower:
-            return "Muestra la distribución de artículos por fuente de datos (Crossref, Semantic Scholar, Science Direct/Scopus)."
+            return "Muestra la distribución de artículos por fuente de datos (Crossref, Semantic Scholar, Science Direct/Scopus y Google Scholar)."
+        elif 'sources_by_year' in fig_lower:
+            return "Ilustra la contribución de cada fuente de datos (incluyendo Google Scholar) a lo largo del tiempo."
         elif 'domain_overlap' in fig_lower or 'venn' in fig_lower:
             return "Ilustra el solapamiento entre diferentes dominios o áreas temáticas."
         elif 'journal' in fig_lower:
             return "Presenta las principales revistas científicas con publicaciones en el área estudiada."
         elif 'author' in fig_lower:
             return "Muestra los autores más prolíficos en el campo analizado."
+        elif 'ai_models_by_source' in fig_lower:
+            return "Compara la distribución de modelos de IA mencionados según las diferentes fuentes de datos."
         elif 'country' in fig_lower:
             return "Ilustra la distribución geográfica de las publicaciones por país."
         elif 'institution' in fig_lower:

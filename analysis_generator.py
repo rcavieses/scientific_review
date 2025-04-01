@@ -224,7 +224,8 @@ class ResultsAnalyzer:
             'Crossref': 'skyblue',
             'Semantic Scholar': 'lightgreen',
             'Science Direct': 'salmon',
-            'Scopus': 'salmon'  # Considerar Science Direct y Scopus como el mismo color
+            'Scopus': 'salmon',  # Considerar Science Direct y Scopus como el mismo color
+            'Google Scholar': 'gold'
         }
         
         # Colores predeterminados para fuentes no especificadas
