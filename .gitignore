@@ -66,8 +66,9 @@ secrets/
 *.png 
 *.jpg
 *.pdf 
-anthropic-api-key.txt
+anthropic-apikey
 *.txt
 *.json
 *.csv
 *.log
+sciencedirect_apikey.txt
