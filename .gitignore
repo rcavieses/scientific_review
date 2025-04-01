@@ -63,3 +63,9 @@ venv.bak/
 # Others
 __pycache__
 secrets/
+*.png 
+*.jpg
+*.pdf 
+anthropic-api-key.txt
+*.txt
+*.json
