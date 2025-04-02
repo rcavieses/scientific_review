@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Script para realizar búsquedas en Google Scholar basado en los tres dominios de búsqueda.
+Script mejorado para realizar búsquedas en Google Scholar basado en los tres dominios de búsqueda.
 Utiliza la biblioteca scholarly para interactuar con Google Scholar y extraer
 títulos y autores de artículos académicos, guardando los resultados en formato JSON.
 
-Este script implementa retrasos aleatorios y rotación de proxies para evitar
-ser bloqueado por Google durante el scraping.
+Este script implementa retrasos aleatorios, rotación de proxies para evitar
+ser bloqueado por Google durante el scraping, y ahora incluye extracción de DOI.
 """
 
 import os
@@ -15,10 +15,12 @@ import json
 import time
 import random
 import argparse
+import re
 from typing import List, Dict, Any, Optional
 from scholarly import scholarly, ProxyGenerator
 import csv
 import logging
+import traceback
 
 # Configurar logging
 logging.basicConfig(
@@ -134,6 +136,61 @@ def random_delay(min_seconds: float = 2.0, max_seconds: float = 5.0) -> None:
     time.sleep(delay)
 
 
+def extract_doi_from_text(text: str) -> Optional[str]:
+    """
+    Intenta extraer un DOI de un texto o URL.
+    
+    Args:
+        text: El texto donde buscar el DOI.
+        
+    Returns:
+        El DOI encontrado o None si no se encuentra.
+    """
+    if not text:
+        return None
+        
+    # Patrones comunes de DOI
+    doi_patterns = [
+        r'10\.\d{4,9}/[-._;()/:A-Z0-9]+',  # Patrón general de DOI
+        r'doi\.org/10\.\d{4,9}/[-._;()/:A-Z0-9]+',  # DOI en URL
+        r'doi:10\.\d{4,9}/[-._;()/:A-Z0-9]+'  # DOI con prefijo doi:
+    ]
+    
+    for pattern in doi_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            doi = match.group(0)
+            # Limpiar el prefijo si existe
+            if doi.lower().startswith('doi.org/'):
+                doi = doi[8:]
+            elif doi.lower().startswith('doi:'):
+                doi = doi[4:]
+            return doi
+    
+    return None
+
+
+def clean_text(text: str) -> str:
+    """
+    Limpia el texto para eliminar caracteres no deseados.
+    
+    Args:
+        text: Texto a limpiar.
+        
+    Returns:
+        Texto limpio.
+    """
+    if not text:
+        return ""
+    
+    # Eliminar caracteres de control
+    text = re.sub(r'[\x00-\x1F\x7F]', '', text)
+    # Reemplazar múltiples espacios por uno solo
+    text = re.sub(r'\s+', ' ', text)
+    # Eliminar espacios al inicio y al final
+    return text.strip()
+
+
 def search_google_scholar(
     search_query: str, 
     max_results: int = 50, 
@@ -191,17 +248,54 @@ def search_google_scholar(
                             pass
                     
                     # Extraer datos relevantes
-                    title = pub.get('bib', {}).get('title', 'Título no disponible')
-                    authors = pub.get('bib', {}).get('author', [])
-                    if isinstance(authors, list):
-                        authors = ", ".join(authors)
+                    title = clean_text(pub.get('bib', {}).get('title', 'Título no disponible'))
+                    
+                    # Manejar autores: pueden venir como lista o como string
+                    authors_data = pub.get('bib', {}).get('author', [])
+                    if isinstance(authors_data, list):
+                        authors = [clean_text(author) for author in authors_data if author]
+                    elif isinstance(authors_data, str):
+                        # Si ya es un string, dividirlo por comas y limpiar
+                        authors = [clean_text(author) for author in authors_data.split(",") if author.strip()]
+                    else:
+                        authors = []
                     
                     # Extraer más información
-                    venue = pub.get('bib', {}).get('venue', 'Fuente no disponible')
-                    abstract = pub.get('bib', {}).get('abstract', '')
+                    venue = clean_text(pub.get('bib', {}).get('venue', 'Fuente no disponible'))
+                    abstract = clean_text(pub.get('bib', {}).get('abstract', ''))
                     url = pub.get('pub_url', pub.get('url_scholarbib', ''))
                     
-                    # Crear objeto de resultado
+                    # Intentar extraer DOI de varias fuentes
+                    doi = None
+                    
+                    # 1. Buscar en la URL
+                    if url:
+                        doi = extract_doi_from_text(url)
+                    
+                    # 2. Si no se encuentra en la URL, buscar en el abstract
+                    if not doi and abstract:
+                        doi = extract_doi_from_text(abstract)
+                    
+                    # 3. Buscar en cualquier otro campo relevante
+                    if not doi:
+                        # Buscar en campos de URL alternativos
+                        for url_field in ['eprint_url', 'url_pdf', 'url_citations']:
+                            if url_field in pub and pub[url_field]:
+                                doi = extract_doi_from_text(pub[url_field])
+                                if doi:
+                                    break
+                    
+                    # 4. Buscar en el título completo por si acaso
+                    if not doi and title:
+                        doi = extract_doi_from_text(title)
+                    
+                    # 5. Como último recurso, convertir todo el objeto pub a texto y buscar
+                    if not doi:
+                        # Convertir el objeto pub a JSON y buscar en el texto completo
+                        full_text = json.dumps(pub)
+                        doi = extract_doi_from_text(full_text)
+                    
+                    # Crear objeto de resultado con datos limpios
                     article_data = {
                         "title": title,
                         "authors": authors,
@@ -210,6 +304,7 @@ def search_google_scholar(
                         "abstract": abstract,
                         "url": url,
                         "citations": pub.get('num_citations', 0),
+                        "doi": doi or "",  # Añadir DOI si se encuentra, o cadena vacía
                         "source": "Google Scholar"
                     }
                     
@@ -227,6 +322,7 @@ def search_google_scholar(
                     break
                 except Exception as e:
                     logger.error(f"Error al procesar un resultado: {str(e)}")
+                    logger.debug(traceback.format_exc())  # Mostrar stack trace detallado en debug
                     consecutive_errors += 1
                     
                     # Esperar más tiempo si hay un error
@@ -243,6 +339,7 @@ def search_google_scholar(
         except Exception as e:
             retry_count += 1
             logger.error(f"Error durante la búsqueda en Google Scholar (intento {retry_count}/{max_retry}): {str(e)}")
+            logger.debug(traceback.format_exc())  # Log del stack trace completo
             
             if retry_count < max_retry:
                 logger.info(f"Reintentando búsqueda después de una pausa...")
@@ -277,6 +374,13 @@ def save_results(results: List[Dict[Any, Any]], filepath: str) -> None:
         logger.info(f"Resultados guardados en {filepath}")
     except Exception as e:
         logger.error(f"Error al guardar los resultados: {str(e)}")
+        # Intentar guardar con una codificación alternativa
+        try:
+            with open(filepath, 'w', encoding='utf-8-sig') as file:
+                json.dump(results, file, ensure_ascii=True, indent=4)
+            logger.info(f"Resultados guardados con codificación alternativa en {filepath}")
+        except Exception as e2:
+            logger.error(f"Error al guardar con codificación alternativa: {str(e2)}")
 
 
 def run_google_scholar_search(
@@ -331,8 +435,11 @@ def run_google_scholar_search(
             year_end=year_end
         )
         
-        # Crear directorio de salida si no existe
-        os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
+        # Verificar y crear directorio de salida
+        output_dir = os.path.dirname(output_file)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Creado directorio de salida: {output_dir}")
         
         # Guardar resultados de Google Scholar
         save_results(results, output_file)
@@ -341,6 +448,10 @@ def run_google_scholar_search(
         
         logger.info(f"Búsqueda completada en {end_time - start_time:.2f} segundos.")
         logger.info(f"Se encontraron {len(results)} resultados.")
+        
+        # Mostrar estadísticas sobre DOIs
+        dois_count = sum(1 for item in results if item.get('doi'))
+        logger.info(f"Se encontraron DOIs para {dois_count} de {len(results)} artículos ({dois_count/len(results)*100:.1f}% de cobertura)")
         
         # Integrar con resultados existentes si se solicita y el archivo existe
         if always_integrate and os.path.exists(integrated_results_file):
@@ -353,6 +464,7 @@ def run_google_scholar_search(
         
     except Exception as e:
         logger.error(f"Error durante la búsqueda en Google Scholar: {str(e)}")
+        logger.debug(traceback.format_exc())  # Log del stack trace completo
 
 
 def integrate_with_existing_results(
@@ -379,16 +491,34 @@ def integrate_with_existing_results(
         
         logger.info(f"Integrando {len(gs_results)} resultados de Google Scholar con {len(existing_results)} resultados existentes")
         
-        # Normalizar títulos para detectar duplicados
+        # Crear conjuntos para detectar duplicados por DOI y por título
+        existing_dois = {item.get('doi', '').lower(): True for item in existing_results if item.get('doi')}
         existing_titles = {normalize_title(item.get('title', '')): True for item in existing_results}
         
         # Filtrar resultados de Google Scholar para eliminar duplicados
         unique_gs_results = []
+        duplicates_by_doi = 0
+        duplicates_by_title = 0
+        
         for item in gs_results:
+            # Comprobar duplicados por DOI primero (más preciso)
+            if item.get('doi') and item.get('doi').lower() in existing_dois:
+                duplicates_by_doi += 1
+                continue
+                
+            # Si no hay duplicado por DOI, comprobar por título
             normalized_title = normalize_title(item.get('title', ''))
-            if normalized_title not in existing_titles:
-                unique_gs_results.append(item)
-                existing_titles[normalized_title] = True
+            if normalized_title in existing_titles:
+                duplicates_by_title += 1
+                continue
+                
+            # Si no es duplicado, añadirlo a los resultados únicos
+            unique_gs_results.append(item)
+            
+            # Actualizar los conjuntos de control para futuros duplicados
+            if item.get('doi'):
+                existing_dois[item.get('doi').lower()] = True
+            existing_titles[normalized_title] = True
         
         # Combinar resultados
         combined_results = existing_results + unique_gs_results
@@ -407,12 +537,14 @@ def integrate_with_existing_results(
         with open(output_file, 'w', encoding='utf-8') as file:
             json.dump(combined_results, file, ensure_ascii=False, indent=4)
         
+        logger.info(f"Eliminados {duplicates_by_doi} duplicados por DOI y {duplicates_by_title} por título")
         logger.info(f"Se añadieron {len(unique_gs_results)} nuevos resultados de Google Scholar.")
         logger.info(f"Total de resultados combinados: {len(combined_results)}")
         logger.info(f"Resultados guardados en {output_file}")
         
     except Exception as e:
         logger.error(f"Error durante la integración de resultados: {str(e)}")
+        logger.debug(traceback.format_exc())
 
 
 def normalize_title(title: str) -> str:
@@ -484,26 +616,10 @@ if __name__ == "__main__":
         domain2_terms=domain2_terms,
         domain3_terms=domain3_terms,
         output_file=args.output,
+        integrated_results_file=args.integrated_file,
         max_results=args.max_results,
         year_start=args.year_start,
         year_end=args.year_end,
-        use_proxy=not args.no_proxy
+        use_proxy=not args.no_proxy,
+        always_integrate=args.integrate
     )
-    
-    # Verificar que el directorio de salida exista
-    output_dir = os.path.dirname(args.output)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-        logger.info(f"Creado directorio de salida: {output_dir}")
-    
-    # Integrar con resultados existentes si se solicita
-    if args.integrate and os.path.exists(args.integrated_file):
-        # Verificar que el archivo de resultados de Google Scholar existe
-        if os.path.exists(args.output):
-            integrate_with_existing_results(
-                google_scholar_file=args.output,
-                integrated_results_file=args.integrated_file,
-                output_file=args.output_integrated
-            )
-        else:
-            logger.error(f"No se pudo integrar: el archivo {args.output} no existe")

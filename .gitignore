@@ -73,3 +73,4 @@ anthropic-apikey
 *.log
 sciencedirect_apikey.txt
 /outputs
+springer_key
