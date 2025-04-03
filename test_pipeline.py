@@ -22,13 +22,13 @@ class TestPipeline(unittest.TestCase):
 
         # Create minimal test config
         self.config = PipelineConfig(
-            domain1="test_data/domain1.csv",
-            domain2="test_data/domain2.csv",
-            domain3="test_data/domain3.csv",
-            max_results=10,
+            domain1="Domain1.csv",
+            domain2="Domain2.csv",
+            domain3="Domain3.csv",
+            max_results=5,
             year_start=2020,
             year_end=2024,
-            email="test@example.com",
+            email="rcavieses@gmail.com",
             figures_dir=self.figures_dir,
             report_file="test_report.md",
             generate_pdf=False,

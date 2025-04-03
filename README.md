@@ -139,15 +139,31 @@ python master_script.py --domain1 Domain1.csv --domain2 Domain2.csv --domain3 Do
 ### Running Specific Phases
 
 ```bash
-# Search phase only
+# Using new pipeline architecture (recommended)
+python pipeline_executor_main.py --only-search
+python pipeline_executor_main.py --only-analysis
+python pipeline_executor_main.py --only-report --generate-pdf
+
+# Legacy method (deprecated)
 python master_script.py --only-search
-
-# Analysis phase only
 python master_script.py --only-analysis
-
-# Report generation only
 python master_script.py --only-report --generate-pdf
 ```
+
+### Pipeline Architecture
+
+The project has been migrated to a modular pipeline architecture:
+
+1. Each phase is implemented as a separate class in `pipeline/phase_runner.py`
+2. The pipeline execution is managed by `pipeline/pipeline_executor.py`
+3. Configuration is handled by `config/config_manager.py`
+4. Logging and error handling by `pipeline/logger.py`
+
+This new architecture provides:
+- Better modularity and testability
+- Cleaner separation of concerns
+- More flexible execution flow
+- Direct execution of phases without subprocess calls
 
 ### Command-Line Options
 

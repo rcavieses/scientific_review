@@ -11,7 +11,22 @@ Este script:
 3. Integra los resultados
 4. Analiza los dominios
 5. Clasifica los artículos usando Anthropic Claude
+
+***********************************************************************
+* DEPRECATION WARNING: This script is deprecated and will be removed  *
+* in future versions. Please use pipeline_executor_main.py instead,   *
+* which implements the new pipeline architecture.                     *
+***********************************************************************
 """
+
+import warnings
+
+warnings.warn(
+    "main_script.py is deprecated and will be removed in future versions. "
+    "Please use pipeline_executor_main.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import os
 import csv
@@ -227,25 +242,19 @@ def run_search_pipeline(
 
     
     # 4. Analizar dominios
-    if not skip_searches and not skip_google_scholar:
-        print("\n----- Búsqueda en Google Scholar -----\n")
-        try:
-            from google_scholar_scraper import run_google_scholar_search
-            run_google_scholar_search(
-                domain1_terms=domain1_terms,
-                domain2_terms=domain2_terms,
-                domain3_terms=domain3_terms,
-                output_file="outputs/google_scholar_results.json",
-                integrated_results_file=None,  # No integrar aquí, lo haremos después con todas las fuentes
-                max_results=max_results,
-                year_start=year_start,
-                year_end=year_end,
-                always_integrate=False,  # No integrar dentro de la función, sino después con el resto
-                use_proxy=True
-            )
-        except Exception as e:
-            print(f"ERROR: No se pudo ejecutar la búsqueda en Google Scholar: {str(e)}")
-            print("Se continuará con el resto del proceso.")
+    if not skip_domain_analysis:
+        print("\n====== INICIANDO ANÁLISIS DE DOMINIO ======\n")
+        run_domain_analysis(
+            input_file="outputs/integrated_results.json",
+            output_results_file="outputs/domain_analyzed_results.json",
+            output_stats_file="outputs/domain_statistics.csv",
+            domain1_terms=domain1_terms,
+            domain2_terms=domain2_terms,
+            domain3_terms=domain3_terms,
+            domain_names=domain_names
+        )
+    else:
+        print("\nSe omitió el análisis de dominio por indicación del usuario.")
         
     # 5. Clasificar con Anthropic Claude
     if not skip_classification:

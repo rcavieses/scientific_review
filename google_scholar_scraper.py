@@ -14,13 +14,17 @@ import os
 import json
 import time
 import random
+import requests
 import argparse
 import re
+import logging
 from typing import List, Dict, Any, Optional
 from scholarly import scholarly, ProxyGenerator
 import csv
-import logging
 import traceback
+
+# Importar tqdm para barra de progreso
+from tqdm import tqdm
 
 # Configurar logging
 logging.basicConfig(
@@ -33,16 +37,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 def load_domain_terms_from_csv(filepath: str) -> List[str]:
     """
     Carga términos de dominio desde un archivo CSV.
-    
-    Args:
-        filepath: Ruta al archivo CSV con los términos.
-        
-    Returns:
-        Lista de términos cargados.
     """
     terms = []
     try:
@@ -58,138 +55,43 @@ def load_domain_terms_from_csv(filepath: str) -> List[str]:
         logger.error(f"Error al cargar términos desde {filepath}: {str(e)}")
         return []
 
-
 def construct_search_query(domain_terms_list: List[List[str]], num_terms_per_domain: int = 2) -> str:
     """
     Construye una query para Google Scholar a partir de los términos de dominio.
-    
-    Args:
-        domain_terms_list: Lista de listas, donde cada lista contiene los términos de un dominio.
-        num_terms_per_domain: Número máximo de términos a usar por dominio para evitar queries muy largas.
-        
-    Returns:
-        Query estructurada para Google Scholar.
     """
-    domain_queries = []
+    all_terms = []
     
     for domain_terms in domain_terms_list:
-        if domain_terms:  # Solo procesamos dominios con términos
-            # Limitar el número de términos por dominio para evitar queries muy largas
-            limited_terms = domain_terms[:num_terms_per_domain]
-            
-            # Formatear los términos del dominio actual
-            domain_query = " OR ".join([f'"{term}"' for term in limited_terms])
-            domain_queries.append(f"({domain_query})")
+        if domain_terms:
+            # Tomamos hasta 2 términos de cada dominio para no sobrecargar la consulta
+            all_terms.extend(domain_terms[:2])
     
-    # Construir la query completa uniendo todos los dominios con AND
-    full_query = " AND ".join(domain_queries)
-    
-    return full_query
-
+    # Unir todos los términos seleccionados con AND
+    return " ".join(all_terms)
 
 def setup_scholarly(use_proxy: bool = True) -> None:
     """
     Configura scholarly para usar proxies y evitar bloqueos.
-    
-    Args:
-        use_proxy: Si es True, utiliza proxies para las solicitudes.
     """
     if use_proxy:
         # Configurar generador de proxies
         pg = ProxyGenerator()
         
-        # Intentar diferentes métodos de configuración de proxy
         try:
-            # Método 1: Usar proxies gratuitos
             logger.info("Intentando configurar con proxies gratuitos...")
             proxy_success = pg.FreeProxies()
             
             if proxy_success:
                 logger.info("Proxy gratuito configurado correctamente")
             else:
-                # Método alternativo: Intentar usar un proxy de rotación de IPs
-                logger.warning("No se pudo configurar FreeProxies, intentando con proxy local...")
-                proxy_success = pg.LocalProxy()
-                
-                if not proxy_success:
-                    logger.warning("No se pudieron configurar proxies, usando configuración predeterminada")
+                logger.warning("No se pudo configurar proxies gratuitos")
             
-            # Aplicar el generador de proxies a scholarly
             scholarly.use_proxy(pg)
             
         except Exception as e:
-            logger.error(f"Error configurando proxies: {str(e)}. Usando configuración predeterminada.")
+            logger.error(f"Error configurando proxies: {str(e)}")
     
-    # Configurar scholarly para comportarse como un navegador
     scholarly.set_timeout(5)
-
-
-def random_delay(min_seconds: float = 2.0, max_seconds: float = 5.0) -> None:
-    """
-    Introduce un retraso aleatorio para simular comportamiento humano.
-    
-    Args:
-        min_seconds: Tiempo mínimo de espera en segundos.
-        max_seconds: Tiempo máximo de espera en segundos.
-    """
-    delay = random.uniform(min_seconds, max_seconds)
-    time.sleep(delay)
-
-
-def extract_doi_from_text(text: str) -> Optional[str]:
-    """
-    Intenta extraer un DOI de un texto o URL.
-    
-    Args:
-        text: El texto donde buscar el DOI.
-        
-    Returns:
-        El DOI encontrado o None si no se encuentra.
-    """
-    if not text:
-        return None
-        
-    # Patrones comunes de DOI
-    doi_patterns = [
-        r'10\.\d{4,9}/[-._;()/:A-Z0-9]+',  # Patrón general de DOI
-        r'doi\.org/10\.\d{4,9}/[-._;()/:A-Z0-9]+',  # DOI en URL
-        r'doi:10\.\d{4,9}/[-._;()/:A-Z0-9]+'  # DOI con prefijo doi:
-    ]
-    
-    for pattern in doi_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            doi = match.group(0)
-            # Limpiar el prefijo si existe
-            if doi.lower().startswith('doi.org/'):
-                doi = doi[8:]
-            elif doi.lower().startswith('doi:'):
-                doi = doi[4:]
-            return doi
-    
-    return None
-
-
-def clean_text(text: str) -> str:
-    """
-    Limpia el texto para eliminar caracteres no deseados.
-    
-    Args:
-        text: Texto a limpiar.
-        
-    Returns:
-        Texto limpio.
-    """
-    if not text:
-        return ""
-    
-    # Eliminar caracteres de control
-    text = re.sub(r'[\x00-\x1F\x7F]', '', text)
-    # Reemplazar múltiples espacios por uno solo
-    text = re.sub(r'\s+', ' ', text)
-    # Eliminar espacios al inicio y al final
-    return text.strip()
-
 
 def search_google_scholar(
     search_query: str, 
@@ -197,29 +99,25 @@ def search_google_scholar(
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
     max_retry: int = 3,
-    max_total_errors: int = 3,  # Nuevo: límite total de errores
-    max_search_time: int = 120  # Nuevo: límite de tiempo en segundos (1 hora)
+    max_total_errors: int = 3,
+    max_search_time: int = 120
 ) -> List[Dict[Any, Any]]:
     """
-    Realiza búsquedas en Google Scholar para extraer información de artículos.
-    
-    Args:
-        search_query: Consulta de búsqueda para Google Scholar.
-        max_results: Número máximo de resultados a extraer.
-        year_start: Año inicial para filtrar resultados (inclusive).
-        year_end: Año final para filtrar resultados (inclusive).
-        max_retry: Número máximo de reintentos en caso de error.
-        max_total_errors: Número máximo total de errores permitidos.
-        max_search_time: Tiempo máximo de búsqueda en segundos.
-        
-    Returns:
-        Lista de resultados con información de artículos.
+    Realiza búsquedas en Google Scholar para extraer información de artículos con barra de progreso.
     """
     results = []
     start_time = time.time()
-    total_errors = 0  # Nuevo: contador de errores totales
+    total_errors = 0
     
-    # Intentar la búsqueda con reintentos
+    # Configurar barra de progreso
+    progress_bar = tqdm(
+        total=max_results, 
+        desc="Buscando artículos", 
+        unit="artículo",
+        dynamic_ncols=True,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+    )
+    
     retry_count = 0
     while retry_count < max_retry:
         try:
@@ -227,13 +125,13 @@ def search_google_scholar(
             
             search_query_gen = scholarly.search_pubs(search_query)
             
-            count = 0
             consecutive_errors = 0
             
             for i in range(max_results):
                 # Verificar tiempo total de búsqueda
                 if time.time() - start_time > max_search_time:
                     logger.warning(f"Se alcanzó el límite de tiempo de búsqueda ({max_search_time} segundos)")
+                    progress_bar.close()
                     return results
                 
                 try:
@@ -242,7 +140,8 @@ def search_google_scholar(
                     
                     # Verificar que haya datos básicos
                     if not pub or not pub.get('bib'):
-                        logger.warning("Resultado sin datos básicos, saltando...")
+                        progress_bar.set_description("Resultado sin datos")
+                        progress_bar.update(0)
                         continue
                     
                     # Filtrar por año si es necesario
@@ -251,159 +150,95 @@ def search_google_scholar(
                         try:
                             year = int(year)
                             if (year_start and year < year_start) or (year_end and year > year_end):
+                                progress_bar.set_description(f"Año {year} fuera de rango")
                                 continue
                         except (ValueError, TypeError):
-                            # Si el año no se puede convertir a entero, lo incluimos de todos modos
                             pass
                     
                     # Extraer datos relevantes
-                    title = clean_text(pub.get('bib', {}).get('title', 'Título no disponible'))
+                    title = pub.get('bib', {}).get('title', 'Título no disponible')
                     
-                    # Manejar autores: pueden venir como lista o como string
+                    # Actualizar barra de progreso
+                    progress_bar.set_description(f"Procesando: {title[:50]}...")
+                    
+                    # Manejar autores
                     authors_data = pub.get('bib', {}).get('author', [])
+                    authors = []
                     if isinstance(authors_data, list):
-                        authors = [clean_text(author) for author in authors_data if author]
+                        authors = [str(author) for author in authors_data if author]
                     elif isinstance(authors_data, str):
-                        # Si ya es un string, dividirlo por comas y limpiar
-                        authors = [clean_text(author) for author in authors_data.split(",") if author.strip()]
-                    else:
-                        authors = []
+                        authors = [author.strip() for author in authors_data.split(",") if author.strip()]
                     
-                    # Extraer más información
-                    venue = clean_text(pub.get('bib', {}).get('venue', 'Fuente no disponible'))
-                    abstract = clean_text(pub.get('bib', {}).get('abstract', ''))
-                    url = pub.get('pub_url', pub.get('url_scholarbib', ''))
-                    
-                    # Intentar extraer DOI de varias fuentes
-                    doi = None
-                    
-                    # 1. Buscar en la URL
-                    if url:
-                        doi = extract_doi_from_text(url)
-                    
-                    # 2. Si no se encuentra en la URL, buscar en el abstract
-                    if not doi and abstract:
-                        doi = extract_doi_from_text(abstract)
-                    
-                    # 3. Buscar en cualquier otro campo relevante
-                    if not doi:
-                        # Buscar en campos de URL alternativos
-                        for url_field in ['eprint_url', 'url_pdf', 'url_citations']:
-                            if url_field in pub and pub[url_field]:
-                                doi = extract_doi_from_text(pub[url_field])
-                                if doi:
-                                    break
-                    
-                    # 4. Buscar en el título completo por si acaso
-                    if not doi and title:
-                        doi = extract_doi_from_text(title)
-                    
-                    # 5. Como último recurso, convertir todo el objeto pub a texto y buscar
-                    if not doi:
-                        # Convertir el objeto pub a JSON y buscar en el texto completo
-                        full_text = json.dumps(pub)
-                        doi = extract_doi_from_text(full_text)
-                    
-                    # Crear objeto de resultado con datos limpios
+                    # Crear objeto de resultado
                     article_data = {
                         "title": title,
                         "authors": authors,
                         "year": year,
-                        "journal": venue,
-                        "abstract": abstract,
-                        "url": url,
+                        "journal": pub.get('bib', {}).get('venue', 'Fuente no disponible'),
+                        "abstract": pub.get('bib', {}).get('abstract', ''),
+                        "url": pub.get('pub_url', pub.get('url_scholarbib', '')),
                         "citations": pub.get('num_citations', 0),
-                        "doi": doi or "",  # Añadir DOI si se encuentra, o cadena vacía
                         "source": "Google Scholar"
                     }
                     
                     results.append(article_data)
-                    count += 1
                     
-                    if count % 5 == 0:
-                        logger.info(f"Recuperados {count} artículos hasta ahora...")
+                    # Actualizar barra de progreso
+                    progress_bar.update(1)
                     
                     # Introducir retraso aleatorio para evitar bloqueos
-                    random_delay(3.0, 6.0)
+                    time.sleep(random.uniform(1.0, 3.0))
                     
+                    # Verificar si hemos alcanzado el número máximo de resultados
+                    if len(results) >= max_results:
+                        progress_bar.close()
+                        return results
+                
                 except StopIteration:
                     logger.info("No hay más resultados disponibles")
-                    break
+                    progress_bar.close()
+                    return results
+                
                 except Exception as e:
                     logger.error(f"Error al procesar un resultado: {str(e)}")
-                    logger.debug(traceback.format_exc())  # Mostrar stack trace detallado en debug
                     consecutive_errors += 1
-                    total_errors += 1  # Nuevo: incrementar errores totales
+                    total_errors += 1
                     
-                    # Verificar límite total de errores
+                    # Actualizar barra de progreso con estado de error
+                    progress_bar.set_description(f"Error: {str(e)}")
+                    
+                    # Verificar límite de errores
                     if total_errors >= max_total_errors:
                         logger.error(f"Se alcanzó el límite de errores totales ({max_total_errors})")
+                        progress_bar.close()
                         return results
                     
-                    # Esperar más tiempo si hay un error
-                    random_delay(5.0, 10.0)
-                    
-                    # Si ocurren varios errores consecutivos, podríamos estar bloqueados
-                    if consecutive_errors >= 3:
-                        logger.error("Múltiples errores consecutivos detectados. Posible bloqueo.")
-                        break
+                    # Esperar y reintentar
+                    time.sleep(random.uniform(3.0, 7.0))
             
-            logger.info(f"Búsqueda completa. Se obtuvieron {len(results)} artículos.")
-            break  # Salir del bucle de reintentos si todo fue bien
+            # Salir del bucle de reintentos
+            break
             
         except Exception as e:
             retry_count += 1
-            total_errors += 1  # Nuevo: incrementar errores totales
+            total_errors += 1
             
-            # Verificar límite total de errores
-            if total_errors >= max_total_errors:
-                logger.error(f"Se alcanzó el límite de errores totales ({max_total_errors})")
+            logger.error(f"Error en la búsqueda: {str(e)}")
+            
+            if retry_count >= max_retry or total_errors >= max_total_errors:
+                logger.error("Se agotaron los reintentos o se alcanzó el límite de errores")
+                if progress_bar:
+                    progress_bar.close()
                 return results
-                
-            logger.error(f"Error durante la búsqueda en Google Scholar (intento {retry_count}/{max_retry}): {str(e)}")
-            logger.debug(traceback.format_exc())  # Log del stack trace completo
             
-            if retry_count < max_retry:
-                logger.info(f"Reintentando búsqueda después de una pausa...")
-                random_delay(10.0, 20.0)  # Pausa más larga entre reintentos
-                
-                # Intentar reiniciar el estado de scholarly
-                try:
-                    logger.info("Reiniciando configuración de scholarly...")
-                    setup_scholarly(True)
-                except:
-                    pass
-            else:
-                logger.error("Se agotaron los reintentos. Finalizando búsqueda.")
+            # Esperar antes de reintentar
+            time.sleep(random.uniform(5.0, 10.0))
+    
+    # Cerrar barra de progreso
+    if progress_bar:
+        progress_bar.close()
     
     return results
-
-
-def save_results(results: List[Dict[Any, Any]], filepath: str) -> None:
-    """
-    Guarda los resultados en un archivo JSON.
-    
-    Args:
-        results: Lista de resultados a guardar.
-        filepath: Ruta del archivo donde guardar los resultados.
-    """
-    # Crear directorio si no existe
-    os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
-    
-    try:
-        with open(filepath, 'w', encoding='utf-8') as file:
-            json.dump(results, file, ensure_ascii=False, indent=4)
-        logger.info(f"Resultados guardados en {filepath}")
-    except Exception as e:
-        logger.error(f"Error al guardar los resultados: {str(e)}")
-        # Intentar guardar con una codificación alternativa
-        try:
-            with open(filepath, 'w', encoding='utf-8-sig') as file:
-                json.dump(results, file, ensure_ascii=True, indent=4)
-            logger.info(f"Resultados guardados con codificación alternativa en {filepath}")
-        except Exception as e2:
-            logger.error(f"Error al guardar con codificación alternativa: {str(e2)}")
-
 
 def run_google_scholar_search(
     domain1_terms: List[str],
@@ -418,23 +253,9 @@ def run_google_scholar_search(
     always_integrate: bool = True
 ) -> None:
     """
-    Función principal que ejecuta la búsqueda en Google Scholar.
-    
-    Args:
-        domain1_terms: Lista de términos del primer dominio.
-        domain2_terms: Lista de términos del segundo dominio.
-        domain3_terms: Lista de términos del tercer dominio (opcional).
-        output_file: Ruta del archivo donde guardar los resultados de Google Scholar.
-        integrated_results_file: Ruta del archivo de resultados integrados donde añadir los nuevos resultados.
-        max_results: Número máximo de resultados a extraer.
-        year_start: Año inicial para filtrar resultados (inclusive).
-        year_end: Año final para filtrar resultados (inclusive).
-        use_proxy: Si es True, utiliza proxies para las solicitudes.
-        always_integrate: Si es True, siempre integra los resultados con el archivo de resultados integrados.
+    Función principal que ejecuta la búsqueda en Google Scholar con barra de progreso.
     """
     try:
-        start_time = time.time()
-        
         # Configurar scholarly
         setup_scholarly(use_proxy)
         
@@ -457,146 +278,21 @@ def run_google_scholar_search(
             year_end=year_end
         )
         
-        # Verificar y crear directorio de salida
-        output_dir = os.path.dirname(output_file)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
-            logger.info(f"Creado directorio de salida: {output_dir}")
+        # Asegurar que el directorio de salida exista
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
         
-        # Guardar resultados de Google Scholar
-        save_results(results, output_file)
+        # Guardar resultados
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=4)
         
-        end_time = time.time()
-        
-        logger.info(f"Búsqueda completada en {end_time - start_time:.2f} segundos.")
-        logger.info(f"Se encontraron {len(results)} resultados.")
-        
-        # Mostrar estadísticas sobre DOIs
-        dois_count = sum(1 for item in results if item.get('doi'))
-        logger.info(f"Se encontraron DOIs para {dois_count} de {len(results)} artículos ({dois_count/len(results)*100:.1f}% de cobertura)")
-        
-        # Integrar con resultados existentes si se solicita y el archivo existe
-        if always_integrate & os.path.exists(integrated_results_file):
-            logger.info(f"Integrando resultados con el archivo existente: {integrated_results_file}")
-            integrate_with_existing_results(
-                google_scholar_file=output_file,
-                integrated_results_file=integrated_results_file,
-                output_file=integrated_results_file  # Sobrescribir el archivo original
-            )
+        logger.info(f"Búsqueda completada. Se encontraron {len(results)} resultados.")
         
     except Exception as e:
         logger.error(f"Error durante la búsqueda en Google Scholar: {str(e)}")
-        logger.debug(traceback.format_exc())  # Log del stack trace completo
+        traceback.print_exc()
 
-
-def integrate_with_existing_results(
-    google_scholar_file: str,
-    integrated_results_file: str,
-    output_file: str
-) -> None:
-    """
-    Integra los resultados de Google Scholar con los resultados existentes.
-    
-    Args:
-        google_scholar_file: Ruta al archivo con resultados de Google Scholar.
-        integrated_results_file: Ruta al archivo con resultados integrados existentes.
-        output_file: Ruta donde guardar los resultados combinados.
-    """
-    try:
-        # Cargar resultados de Google Scholar
-        with open(google_scholar_file, 'r', encoding='utf-8') as file:
-            gs_results = json.load(file)
-        
-        # Cargar resultados integrados existentes
-        with open(integrated_results_file, 'r', encoding='utf-8') as file:
-            existing_results = json.load(file)
-        
-        logger.info(f"Integrando {len(gs_results)} resultados de Google Scholar con {len(existing_results)} resultados existentes")
-        
-        # Crear conjuntos para detectar duplicados por DOI y por título
-        existing_dois = {item.get('doi', '').lower(): True for item in existing_results if item.get('doi')}
-        existing_titles = {normalize_title(item.get('title', '')): True for item in existing_results}
-        
-        # Filtrar resultados de Google Scholar para eliminar duplicados
-        unique_gs_results = []
-        duplicates_by_doi = 0
-        duplicates_by_title = 0
-        
-        for item in gs_results:
-            # Comprobar duplicados por DOI primero (más preciso)
-            if item.get('doi') & item.get('doi').lower() in existing_dois:
-                duplicates_by_doi += 1
-                continue
-                
-            # Si no hay duplicado por DOI, comprobar por título
-            normalized_title = normalize_title(item.get('title', ''))
-            if normalized_title in existing_titles:
-                duplicates_by_title += 1
-                continue
-                
-            # Si no es duplicado, añadirlo a los resultados únicos
-            unique_gs_results.append(item)
-            
-            # Actualizar los conjuntos de control para futuros duplicados
-            if item.get('doi'):
-                existing_dois[item.get('doi').lower()] = True
-            existing_titles[normalized_title] = True
-        
-        # Combinar resultados
-        combined_results = existing_results + unique_gs_results
-        
-        # Ordenar por año (descendente) y luego por citas (descendente)
-        combined_results = sorted(
-            combined_results, 
-            key=lambda x: (
-                int(x.get('year', 0)) if x.get('year') & isinstance(x.get('year'), (int, str)) & str(x.get('year')).isdigit() else 0,
-                int(x.get('citations', 0)) if x.get('citations') else 0
-            ), 
-            reverse=True
-        )
-        
-        # Guardar resultados combinados
-        with open(output_file, 'w', encoding='utf-8') as file:
-            json.dump(combined_results, file, ensure_ascii=False, indent=4)
-        
-        logger.info(f"Eliminados {duplicates_by_doi} duplicados por DOI y {duplicates_by_title} por título")
-        logger.info(f"Se añadieron {len(unique_gs_results)} nuevos resultados de Google Scholar.")
-        logger.info(f"Total de resultados combinados: {len(combined_results)}")
-        logger.info(f"Resultados guardados en {output_file}")
-        
-    except Exception as e:
-        logger.error(f"Error durante la integración de resultados: {str(e)}")
-        logger.debug(traceback.format_exc())
-
-
-def normalize_title(title: str) -> str:
-    """
-    Normaliza un título para comparación y detección de duplicados.
-    
-    Args:
-        title: El título a normalizar.
-        
-    Returns:
-        Título normalizado.
-    """
-    if not title:
-        return ""
-    
-    # Eliminar espacios extras, convertir a minúsculas y eliminar puntuación común
-    title = title.lower().strip()
-    for char in ['.', ',', ':', ';', '!', '?', '(', ')', '[', ']', '{', '}', '"', "'"]:
-        title = title.replace(char, '')
-    
-    # Eliminar artículos y palabras comunes que no aportan significado para la comparación
-    words_to_remove = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for']
-    words = title.split()
-    filtered_words = [word for word in words if word not in words_to_remove]
-    
-    return ' '.join(filtered_words)
-
-
+# Punto de entrada para ejecución directa
 if __name__ == "__main__":
-    # Configurar parser de argumentos
     parser = argparse.ArgumentParser(description="Herramienta de búsqueda en Google Scholar")
     
     # Argumentos para búsqueda
@@ -614,16 +310,8 @@ if __name__ == "__main__":
                         help="Año inicial para filtrar resultados")
     parser.add_argument("--year-end", type=int, default=None,
                         help="Año final para filtrar resultados")
-    parser.add_argument("--no-proxy", action="store_true",
-                        help="No utilizar proxies para las solicitudes")
-    
-    # Argumentos para integración
-    parser.add_argument("--integrate", action="store_true",
-                        help="Integrar con resultados existentes")
-    parser.add_argument("--integrated-file", type=str, default="outputs/integrated_results.json",
-                        help="Archivo con resultados integrados existentes")
-    parser.add_argument("--output-integrated", type=str, default="outputs/new_integrated_results.json",
-                        help="Archivo donde guardar los resultados integrados")
+    parser.add_argument("--use-proxy", action="store_true",
+                        help="Utilizar proxies para las solicitudes")
     
     args = parser.parse_args()
     
@@ -638,10 +326,8 @@ if __name__ == "__main__":
         domain2_terms=domain2_terms,
         domain3_terms=domain3_terms,
         output_file=args.output,
-        integrated_results_file=args.integrated_file,
         max_results=args.max_results,
         year_start=args.year_start,
         year_end=args.year_end,
-        use_proxy=not args.no_proxy,
-        always_integrate=args.integrate
+        use_proxy=args.use_proxy
     )

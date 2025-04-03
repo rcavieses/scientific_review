@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 from typing import List, Dict, Any
 from config.config_manager import PipelineConfig
-from pipeline.phase_runner import PhaseRunner, SearchPhase, AnalysisPhase, ReportPhase  # Ensure PhaseRunner is correctly imported
+from pipeline.phase_runner import PhaseRunner, SearchPhase, AnalysisPhase, ReportPhase, DomainAnalysisPhase, ClassificationPhase  
 from .logger import Logger
 
 class PipelineExecutor:
@@ -84,7 +84,16 @@ class PipelineExecutor:
         
         # Only add phases based on configuration
         if not (self.config.only_analysis or self.config.only_report):
+            # Search phase includes the initial data collection
             phases.append(SearchPhase(self.config))
+            
+            # Domain analysis is now a separate phase in the new architecture
+            if not self.config.skip_domain_analysis:
+                phases.append(DomainAnalysisPhase(self.config))
+                
+            # Classification phase using NLP (Claude)
+            if not self.config.skip_classification:
+                phases.append(ClassificationPhase(self.config))
             
         if not (self.config.only_search or self.config.only_report):
             phases.append(AnalysisPhase(self.config))
@@ -94,11 +103,22 @@ class PipelineExecutor:
             
         # If no specific phase is requested, run all
         if not phases:
-            phases = [
+            all_phases = [
                 SearchPhase(self.config),
+                DomainAnalysisPhase(self.config),
+                ClassificationPhase(self.config),
                 AnalysisPhase(self.config),
                 ReportPhase(self.config)
             ]
+            
+            # Filter out phases that should be skipped
+            if self.config.skip_domain_analysis:
+                all_phases = [p for p in all_phases if not isinstance(p, DomainAnalysisPhase)]
+                
+            if self.config.skip_classification:
+                all_phases = [p for p in all_phases if not isinstance(p, ClassificationPhase)]
+                
+            phases = all_phases
             
         return phases
 

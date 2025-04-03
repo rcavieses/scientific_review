@@ -322,46 +322,92 @@ def run_domain_analysis(
         print(f"Error durante el análisis de dominio: {str(e)}")
 
 
+def load_domain_terms_from_csv(filepath: str) -> List[str]:
+    """
+    Carga términos de dominio desde un archivo CSV.
+    
+    Args:
+        filepath: Ruta al archivo CSV con los términos.
+        
+    Returns:
+        Lista de términos cargados.
+    """
+    terms = []
+    try:
+        with open(filepath, 'r', encoding='utf-8') as file:
+            reader = csv.reader(file)
+            for row in reader:
+                if row and row[0].strip():  # Verificar que no sea una fila vacía
+                    terms.append(row[0].strip())
+            
+        print(f"Se cargaron {len(terms)} términos desde {filepath}")
+        return terms
+    except Exception as e:
+        print(f"Error al cargar términos desde {filepath}: {str(e)}")
+        return []
+
+
 if __name__ == "__main__":
+    # Parse command line arguments
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Análisis de dominios en artículos científicos')
+    
+    parser.add_argument('--input-file', type=str, required=False, 
+                        default="outputs/integrated_results.json",
+                        help='Archivo JSON con resultados integrados')
+    
+    parser.add_argument('--output-results', type=str, required=False,
+                        default="outputs/domain_analyzed_results.json",
+                        help='Archivo de salida para resultados analizados')
+    
+    parser.add_argument('--output-stats', type=str, required=False,
+                        default="outputs/domain_statistics.csv",
+                        help='Archivo de salida para estadísticas')
+    
+    parser.add_argument('--domain1', type=str, required=False,
+                        default="Domain1.csv",
+                        help='Archivo CSV con términos del primer dominio')
+    
+    parser.add_argument('--domain2', type=str, required=False,
+                        default="Domain2.csv",
+                        help='Archivo CSV con términos del segundo dominio')
+    
+    parser.add_argument('--domain3', type=str, required=False,
+                        default=None,
+                        help='Archivo CSV con términos del tercer dominio (opcional)')
+                        
+    parser.add_argument('--domain1-name', type=str, default='IA',
+                        help='Nombre del primer dominio (default: IA)')
+                        
+    parser.add_argument('--domain2-name', type=str, default='Pronóstico',
+                        help='Nombre del segundo dominio (default: Pronóstico)')
+                        
+    parser.add_argument('--domain3-name', type=str, default='Pesquerías',
+                        help='Nombre del tercer dominio (default: Pesquerías)')
+                        
+    args = parser.parse_args()
+    
     # Crear carpeta outputs si no existe
     os.makedirs("outputs", exist_ok=True)
     
-    # Ejemplo de uso con tres dominios para análisis de modelos de IA para pronóstico en pesquerías
-    dominio1_modelos = [
-        "artificial intelligence", 
-        "machine learning", 
-        "deep learning", 
-        "neural networks", 
-        "random forest",
-        "support vector machine"
-    ]
+    # Cargar términos de dominio desde archivos CSV
+    domain1_terms = load_domain_terms_from_csv(args.domain1)
+    domain2_terms = load_domain_terms_from_csv(args.domain2)
+    domain3_terms = load_domain_terms_from_csv(args.domain3) if args.domain3 else None
     
-    dominio2_pronostico = [
-        "forecast", 
-        "prediction", 
-        "forecasting", 
-        "time series", 
-        "predictive modeling"
-    ]
-    
-    dominio3_pesca = [
-        "fishery", 
-        "fisheries", 
-        "fish stock", 
-        "fishing", 
-        "aquaculture",
-        "marine resources"
-    ]
-    
-    nombres_dominios = ["IA", "Pronóstico", "Pesquerías"]
+    # Configurar nombres de dominio
+    domain_names = [args.domain1_name, args.domain2_name]
+    if domain3_terms:
+        domain_names.append(args.domain3_name)
     
     # Ejecutar el análisis
     run_domain_analysis(
-        input_file="outputs/integrated_results.json",
-        output_results_file="outputs/domain_analyzed_results.json",
-        output_stats_file="outputs/domain_statistics.csv",
-        domain1_terms=dominio1_modelos,
-        domain2_terms=dominio2_pronostico,
-        domain3_terms=dominio3_pesca,
-        domain_names=nombres_dominios
+        input_file=args.input_file,
+        output_results_file=args.output_results,
+        output_stats_file=args.output_stats,
+        domain1_terms=domain1_terms,
+        domain2_terms=domain2_terms,
+        domain3_terms=domain3_terms,
+        domain_names=domain_names
     )
