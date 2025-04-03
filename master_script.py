@@ -55,8 +55,11 @@ def main():
     print(f"Hora de finalización: {end_time}")
     print(f"Duración total: {duration}")
     
-    # Retornar código de estado
-    return 0 if success else 1
+    # Forzar la terminación del programa
+    sys.exit(0 if success else 1)
+    
+    # El código siguiente ya no es necesario
+    # return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main())

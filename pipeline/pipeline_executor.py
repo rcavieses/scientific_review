@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 from typing import List, Dict, Any
 from config.config_manager import PipelineConfig
-from pipeline.phase_runner import PhaseRunner, SearchPhase, AnalysisPhase, ReportPhase, DomainAnalysisPhase, ClassificationPhase  
+from pipeline.phase_runner import PhaseRunner, SearchPhase, AnalysisPhase, ReportPhase, DomainAnalysisPhase, ClassificationPhase,  TableExportPhase  
 from .logger import Logger
 
 class PipelineExecutor:
@@ -90,16 +90,17 @@ class PipelineExecutor:
             # Domain analysis is now a separate phase in the new architecture
             if not self.config.skip_domain_analysis:
                 phases.append(DomainAnalysisPhase(self.config))
-                
-            # Classification phase using NLP (Claude)
-            if not self.config.skip_classification:
                 phases.append(ClassificationPhase(self.config))
-            
+            # Classification phase using NLP (Claude)
         if not (self.config.only_search or self.config.only_report):
             phases.append(AnalysisPhase(self.config))
             
         if not (self.config.only_search or self.config.only_analysis):
             phases.append(ReportPhase(self.config))
+        
+        # Add table export phase if not skipped
+        if not self.config.skip_table:
+            phases.append(TableExportPhase(self.config))
             
         # If no specific phase is requested, run all
         if not phases:
@@ -108,6 +109,7 @@ class PipelineExecutor:
                 DomainAnalysisPhase(self.config),
                 ClassificationPhase(self.config),
                 AnalysisPhase(self.config),
+                TableExportPhase(self.config),
                 ReportPhase(self.config)
             ]
             
@@ -117,6 +119,9 @@ class PipelineExecutor:
                 
             if self.config.skip_classification:
                 all_phases = [p for p in all_phases if not isinstance(p, ClassificationPhase)]
+                
+            if self.config.skip_table:
+                all_phases = [p for p in all_phases if not isinstance(p, TableExportPhase)]
                 
             phases = all_phases
             

@@ -645,4 +645,45 @@ class DomainAnalysisPhase(PhaseRunner):
             print(f"Estadísticas guardadas en {filepath}")
         except Exception as e:
             print(f"Error al guardar las estadísticas en CSV: {str(e)}")
- 
+
+class TableExportPhase(PhaseRunner):
+    """Phase runner for exporting article tables."""
+    def __init__(self, config: PipelineConfig):
+        self.config = config
+
+    def get_command(self) -> List[str]:
+        """For backward compatibility with subprocess execution"""
+        cmd = [
+            sys.executable,
+            "export_articles_table.py",
+            "--input", os.path.join("outputs", "classified_results.json"),
+            "--output", self.config.table_file,
+            "--format", self.config.table_format
+        ]
+        return cmd
+    
+    def get_description(self) -> str:
+        return "Exportación de tabla de artículos"
+        
+    def run(self) -> bool:
+        """Execute table export directly"""
+        try:
+            print(f"\n===== EJECUTANDO: {self.get_description()} =====")
+            
+            from export_articles_table import export_articles_table
+            
+            success = export_articles_table(
+                input_file=os.path.join("outputs", "classified_results.json"),
+                output_file=self.config.table_file,
+                format=self.config.table_format
+            )
+            
+            if success:
+                print(f"Tabla de artículos exportada exitosamente a: {self.config.table_file}")
+            
+            return success
+            
+        except Exception as e:
+            print(f"\nERROR: Ocurrió una excepción durante la exportación de tabla: {str(e)}")
+            return False
+
