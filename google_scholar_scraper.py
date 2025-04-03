@@ -196,7 +196,9 @@ def search_google_scholar(
     max_results: int = 50, 
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
-    max_retry: int = 3
+    max_retry: int = 3,
+    max_total_errors: int = 3,  # Nuevo: límite total de errores
+    max_search_time: int = 120  # Nuevo: límite de tiempo en segundos (1 hora)
 ) -> List[Dict[Any, Any]]:
     """
     Realiza búsquedas en Google Scholar para extraer información de artículos.
@@ -207,11 +209,15 @@ def search_google_scholar(
         year_start: Año inicial para filtrar resultados (inclusive).
         year_end: Año final para filtrar resultados (inclusive).
         max_retry: Número máximo de reintentos en caso de error.
+        max_total_errors: Número máximo total de errores permitidos.
+        max_search_time: Tiempo máximo de búsqueda en segundos.
         
     Returns:
         Lista de resultados con información de artículos.
     """
     results = []
+    start_time = time.time()
+    total_errors = 0  # Nuevo: contador de errores totales
     
     # Intentar la búsqueda con reintentos
     retry_count = 0
@@ -219,17 +225,20 @@ def search_google_scholar(
         try:
             logger.info(f"Iniciando búsqueda en Google Scholar (intento {retry_count + 1}/{max_retry}): {search_query}")
             
-            # Crear el generador de búsqueda de publicaciones
             search_query_gen = scholarly.search_pubs(search_query)
             
             count = 0
             consecutive_errors = 0
             
             for i in range(max_results):
+                # Verificar tiempo total de búsqueda
+                if time.time() - start_time > max_search_time:
+                    logger.warning(f"Se alcanzó el límite de tiempo de búsqueda ({max_search_time} segundos)")
+                    return results
+                
                 try:
-                    # Recuperar el siguiente resultado
                     pub = next(search_query_gen)
-                    consecutive_errors = 0  # Resetear contador de errores
+                    consecutive_errors = 0
                     
                     # Verificar que haya datos básicos
                     if not pub or not pub.get('bib'):
@@ -324,6 +333,12 @@ def search_google_scholar(
                     logger.error(f"Error al procesar un resultado: {str(e)}")
                     logger.debug(traceback.format_exc())  # Mostrar stack trace detallado en debug
                     consecutive_errors += 1
+                    total_errors += 1  # Nuevo: incrementar errores totales
+                    
+                    # Verificar límite total de errores
+                    if total_errors >= max_total_errors:
+                        logger.error(f"Se alcanzó el límite de errores totales ({max_total_errors})")
+                        return results
                     
                     # Esperar más tiempo si hay un error
                     random_delay(5.0, 10.0)
@@ -338,6 +353,13 @@ def search_google_scholar(
             
         except Exception as e:
             retry_count += 1
+            total_errors += 1  # Nuevo: incrementar errores totales
+            
+            # Verificar límite total de errores
+            if total_errors >= max_total_errors:
+                logger.error(f"Se alcanzó el límite de errores totales ({max_total_errors})")
+                return results
+                
             logger.error(f"Error durante la búsqueda en Google Scholar (intento {retry_count}/{max_retry}): {str(e)}")
             logger.debug(traceback.format_exc())  # Log del stack trace completo
             
@@ -392,7 +414,7 @@ def run_google_scholar_search(
     max_results: int = 50,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
-    use_proxy: bool = True,
+    use_proxy: bool = False,
     always_integrate: bool = True
 ) -> None:
     """
@@ -454,7 +476,7 @@ def run_google_scholar_search(
         logger.info(f"Se encontraron DOIs para {dois_count} de {len(results)} artículos ({dois_count/len(results)*100:.1f}% de cobertura)")
         
         # Integrar con resultados existentes si se solicita y el archivo existe
-        if always_integrate and os.path.exists(integrated_results_file):
+        if always_integrate & os.path.exists(integrated_results_file):
             logger.info(f"Integrando resultados con el archivo existente: {integrated_results_file}")
             integrate_with_existing_results(
                 google_scholar_file=output_file,
@@ -502,7 +524,7 @@ def integrate_with_existing_results(
         
         for item in gs_results:
             # Comprobar duplicados por DOI primero (más preciso)
-            if item.get('doi') and item.get('doi').lower() in existing_dois:
+            if item.get('doi') & item.get('doi').lower() in existing_dois:
                 duplicates_by_doi += 1
                 continue
                 
@@ -527,7 +549,7 @@ def integrate_with_existing_results(
         combined_results = sorted(
             combined_results, 
             key=lambda x: (
-                int(x.get('year', 0)) if x.get('year') and isinstance(x.get('year'), (int, str)) and str(x.get('year')).isdigit() else 0,
+                int(x.get('year', 0)) if x.get('year') & isinstance(x.get('year'), (int, str)) & str(x.get('year')).isdigit() else 0,
                 int(x.get('citations', 0)) if x.get('citations') else 0
             ), 
             reverse=True

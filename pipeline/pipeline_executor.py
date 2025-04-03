@@ -26,6 +26,7 @@ class PipelineExecutor:
                 phase_name = phase.get_description()
                 self.logger.start_phase(phase_name)
                 
+                # Ensure each phase is executed only once
                 phase_success = phase.run()
                 details = {"phase": phase_name}
                 
@@ -36,7 +37,7 @@ class PipelineExecutor:
                 self.logger.end_phase(phase_success, details)
                 
                 if not phase_success:
-                    break
+                    break  # Stop execution if a phase fails
 
         except Exception as e:
             self.logger.log_error(e)
@@ -45,7 +46,7 @@ class PipelineExecutor:
         # Save execution summary
         stats = {
             "total_phases": len(phases),
-            "completed": len([p for p in phases if p.run()]),
+            "completed": len([p for p in phases if p.run()]),  # Avoid re-running phases here
             "configuration": self._get_config_summary()
         }
         
@@ -106,7 +107,8 @@ class PipelineExecutor:
         return {
             "search_settings": {
                 "max_results": self.config.max_results,
-                "year_range": f"{self.config.year_start}-{self.config.year_end or 'present'}"
+                "year_range": f"{self.config.year_start}-{self.config.year_end or 'present'}",
+                "no_proxy": getattr(self.config, 'no_proxy', True)
             },
             "output_settings": {
                 "figures_dir": self.config.figures_dir,

@@ -62,7 +62,7 @@ class ConfigManager:
                           help='Archivo CSV con términos del segundo dominio')
         group.add_argument('--domain3', type=str, default='Domain3.csv',
                           help='Archivo CSV con términos del tercer dominio')
-        group.add_argument('--max-results', type=int, default=100,
+        group.add_argument('--max-results', type=int, default=50,
                           help='Número máximo de resultados por búsqueda')
         group.add_argument('--year-start', type=int, default=2008,
                           help='Año inicial para filtrar resultados')
