@@ -60,18 +60,37 @@ ENV/
 env.bak/
 venv.bak/
 
-# Others
-__pycache__
+# ── Credenciales y API keys ────────────────────────────────────────────────
+# Directorio de secretos (contiene apikeys de Scopus, ScienceDirect, Anthropic)
 secrets/
-*.png 
-*.jpg
-*.pdf 
+
+# Archivos de API keys sueltos (por si se crean fuera de secrets/)
+*apikey*
+*api_key*
+*api-key*
 anthropic-apikey
-*.txt
-*.json
+springer_key
+openai_key*
+*_token.txt
+*_secret.txt
+
+# Variables de entorno con credenciales
+.env
+.env.*
+*.env
+
+# ── Outputs del pipeline (datos generados, no código) ──────────────────────
+/outputs/
+
+# ── Archivos de datos y logs ───────────────────────────────────────────────
+*.pdf
+*.png
+*.jpg
+*.jpeg
 *.csv
 *.log
-sciencedirect_apikey.txt
-/outputs
-springer_key
+
+# ── Miscelánea del proyecto ────────────────────────────────────────────────
+__pycache__
 CLAUDE.md
+search_logs/
