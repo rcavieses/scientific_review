@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# scientific_review — dependencias core (Fases 1–3)
+# Instalar:  pip install -r requirements.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Base numérica ─────────────────────────────────────────────────────────────
+numpy>=1.24
+
+# ── Búsqueda de artículos (Fase 1) ───────────────────────────────────────────
+requests>=2.28          # HTTP para Crossref, PubMed, arXiv, Unpaywall
+tqdm>=4.64              # barras de progreso
+
+# ── Embeddings (Fase 2) ───────────────────────────────────────────────────────
+# PyTorch: instala automáticamente la variante CPU.
+# Para GPU con CUDA visita: https://pytorch.org/get-started/locally/
+torch>=2.0
+sentence-transformers>=2.2   # modelo local all-MiniLM-L6-v2 (384 dims)
+transformers>=4.30
+huggingface-hub>=0.16
+
+# ── RAG pipeline — extracción de PDFs (Fase 3) ────────────────────────────────
+pdfplumber>=0.10        # extracción de texto de PDFs científicos
+pillow>=9.0             # dependencia de pdfplumber (procesamiento de imágenes)
+
+# ── RAG pipeline — índice vectorial FAISS (Fase 3) ───────────────────────────
+faiss-cpu>=1.7          # índice de similitud coseno (FlatIP)
+scipy>=1.10             # operaciones matriciales auxiliares
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPCIONAL — descomentar según necesidad
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Embeddings vía API de OpenAI (OpenAIEmbeddingGenerator):
+# openai>=1.0
+
+# Soporte CUDA (reemplaza faiss-cpu):
+# faiss-gpu>=1.7

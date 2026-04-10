@@ -1,0 +1,15 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# scientific_review — dependencias de desarrollo
+# Incluye todo lo necesario para el notebook demo y los tests.
+# Instalar:  pip install -r requirements-dev.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Incluye las dependencias core
+-r requirements.txt
+
+# ── Jupyter notebook (pipeline_demo.ipynb) ────────────────────────────────────
+notebook>=7.0           # servidor Jupyter clásico
+ipykernel>=6.0          # kernel Python para Jupyter
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+# unittest ya viene incluido en la stdlib de Python — no requiere instalación
