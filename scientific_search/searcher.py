@@ -42,6 +42,7 @@ class ScientificArticleSearcher:
         sources: Optional[List[str]] = None,
         output_directory: Optional[Path] = None,
         download_directory: Optional[Path] = None,
+        local_pdf_directory: Optional[Path] = None,
         verbose: bool = False,
         adapter_config: Optional[Dict[str, Dict]] = None,
     ):
@@ -50,14 +51,18 @@ class ScientificArticleSearcher:
 
         Args:
             sources: Fuentes a usar (por defecto todas: crossref, pubmed, arxiv, scopus).
+                    Incluye "local_pdf" para buscar en carpeta local de PDFs.
             output_directory: Directorio para guardar resultados.
             download_directory: Directorio para descargas.
+            local_pdf_directory: Directorio con PDFs locales (para fuente "local_pdf").
+                                Si es None, usa outputs/pdfs/
             verbose: Mostrar mensajes detallados.
             adapter_config: Kwargs extra por adaptador, ej. {"scopus": {"apikey": "..."}}.
         """
         self.sources = sources or list(AVAILABLE_ADAPTERS.keys())
         self.output_directory = Path(output_directory or Path.cwd())
         self.download_directory = download_directory
+        self.local_pdf_directory = local_pdf_directory
         self.verbose = verbose
 
         # Inicializar componentes
@@ -70,6 +75,9 @@ class ScientificArticleSearcher:
         for source in self.sources:
             if source in AVAILABLE_ADAPTERS:
                 kwargs = adapter_config.get(source, {})
+                # Pasar local_pdf_directory a LocalPdfAdapter
+                if source == "local_pdf" and local_pdf_directory:
+                    kwargs["pdf_directory"] = local_pdf_directory
                 self.adapters[source] = AVAILABLE_ADAPTERS[source](**kwargs)
 
         # Configurar logging

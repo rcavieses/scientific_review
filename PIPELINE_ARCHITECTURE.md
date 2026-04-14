@@ -16,13 +16,13 @@ El proyecto implementa un pipeline de revisión científica automatizada en cinc
 ## Fase 0 — Búsqueda multi-fuente (`scientific_search/`)
 
 ### Propósito
-Recuperar metadatos de artículos científicos de múltiples APIs, filtrarlos por relevancia y opcionalmente descargar los PDFs en acceso abierto.
+Recuperar metadatos de artículos científicos de múltiples fuentes: APIs externas (Crossref, PubMed, arXiv, Scopus) y PDFs locales en una carpeta. Filtrar por relevancia y opcionalmente descargar PDFs en acceso abierto.
 
 ### Archivos
 | Archivo | Clase / Función | Rol |
 |---------|----------------|-----|
 | `searcher.py` | `ScientificArticleSearcher` | Orquestador principal |
-| `adapters.py` | `CrossrefAdapter`, `PubMedAdapter`, `ArxivAdapter`, `ScopusAdapter` | Un adaptador por API |
+| `adapters.py` | `CrossrefAdapter`, `PubMedAdapter`, `ArxivAdapter`, `ScopusAdapter`, `LocalPdfAdapter` | Adaptadores: APIs remotas + PDFs locales |
 | `models.py` | `Article`, `SearchResult` | Modelos de datos |
 | `registry.py` | `SearchRegistry` | Deduplicación y persistencia en CSV |
 | `downloader.py` | `ArticleDownloader` | Descarga PDFs vía Unpaywall / URL directa |
@@ -31,12 +31,24 @@ Recuperar metadatos de artículos científicos de múltiples APIs, filtrarlos po
 | Entrada | Descripción |
 |---------|-------------|
 | `query` (str) | Término o frase de búsqueda |
-| `sources` (list) | APIs a consultar: `crossref`, `pubmed`, `arxiv`, `scopus` |
+| `sources` (list) | Fuentes a consultar: `crossref`, `pubmed`, `arxiv`, `scopus`, `local_pdf` |
 | `max_results` (int) | Resultados por fuente (default: 20) |
 | `year_start / year_end` (int) | Ventana temporal |
 | `min_relevance` (float 0‑1) | Fracción mínima de términos de dominio en el título |
+| `local_pdf_directory` (path) | Carpeta con PDFs locales (default: `outputs/pdfs/`) |
 | `adapter_config` (dict) | API keys por adaptador (Scopus, ScienceDirect) |
 | `secrets/scopus_apikey.txt` | Clave API de Elsevier (leída automáticamente) |
+
+### Extracción de metadatos (LocalPdfAdapter)
+El adaptador `LocalPdfAdapter` extrae automáticamente metadatos de PDFs locales usando `pdfplumber`:
+
+| Campo | Método de extracción |
+|-------|----------------------|
+| **Título** | Metadatos del PDF → primera línea del texto (100–200 caracteres) |
+| **Autores** | Heurística de primeras líneas (nombres con may/min, sin afiliaciones) |
+| **Año** | Búsqueda de años (1900–2100) en primeras 5 páginas |
+| **Abstract** | Búsqueda de palabra clave "abstract" y párrafo subsiguiente |
+| **Fuente** | Anotada como `"local_pdf"` |
 
 ### Salidas
 | Salida | Ubicación | Formato |
@@ -44,13 +56,20 @@ Recuperar metadatos de artículos científicos de múltiples APIs, filtrarlos po
 | Resultados de búsqueda | `outputs/search_results/<query>_<timestamp>.csv` | CSV |
 | Log completo | `outputs/search_logs/<query>_<timestamp>_full_log.json` | JSON |
 | PDFs descargados | `outputs/pdfs/*.pdf` | PDF |
+| PDFs locales indexados | `<local_pdf_directory>/*.pdf` | PDF |
 
 ### CLI principal
 ```bash
+# Búsqueda en APIs externas
 python buscar.py "Lutjanus peru population parameters Gulf of California"
 python buscar.py "sardina" --lugar "Gulf of California" --sources scopus
 python buscar.py "mako shark" --download --year-start 2018 --max-results 50
 python buscar.py "reef fish" --download --index   # descarga + indexa en FAISS
+
+# Búsqueda en PDFs locales
+python buscar.py "Lutjanus" --sources local_pdf
+python buscar.py "population" --sources local_pdf --pdf-dir papers/
+python buscar.py "predator" --sources crossref,local_pdf   # combina APIs + local
 ```
 
 ---
@@ -545,8 +564,8 @@ scientific_review/
 ├── visualizar_grafo.py        CLI: visualización HTML del grafo
 │
 ├── scientific_search/         Fase 0 — Búsqueda multi-fuente
-│   ├── searcher.py            ScientificArticleSearcher
-│   ├── adapters.py            CrossrefAdapter, PubMedAdapter, ArxivAdapter, ScopusAdapter
+│   ├── searcher.py            ScientificArticleSearcher (búsqueda integrada)
+│   ├── adapters.py            CrossrefAdapter, PubMedAdapter, ArxivAdapter, ScopusAdapter, LocalPdfAdapter
 │   ├── models.py              Article, SearchResult
 │   ├── registry.py            SearchRegistry (CSV + deduplicación)
 │   └── downloader.py          ArticleDownloader (Unpaywall)

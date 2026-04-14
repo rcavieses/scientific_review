@@ -4,11 +4,17 @@ Adaptadores para diferentes APIs de búsqueda de artículos científicos.
 
 import requests
 import time
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from .models import Article
 import xml.etree.ElementTree as ET
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
 
 # Rutas donde buscar la API key de Elsevier (Scopus / ScienceDirect)
 _ELSEVIER_APIKEY_PATHS = [
@@ -585,10 +591,253 @@ class ScopusAdapter(BaseAdapter):
         )
 
 
+class LocalPdfAdapter(BaseAdapter):
+    """Adaptador que lee metadatos de PDFs en una carpeta local."""
+
+    def __init__(
+        self,
+        pdf_directory: Optional[Path] = None,
+        timeout: int = 10,
+        retry_delay: float = 1.0,
+    ):
+        """
+        Inicializa el adaptador de PDFs locales.
+
+        Args:
+            pdf_directory: Directorio donde buscar PDFs.
+                          Si es None, usa outputs/pdfs/
+            timeout: Tiempo máximo de espera (no usado aquí).
+            retry_delay: Retraso entre reintentos (no usado aquí).
+        """
+        super().__init__(timeout, retry_delay)
+
+        if pdf_directory is None:
+            pdf_directory = Path(__file__).parent.parent / "outputs" / "pdfs"
+
+        self.pdf_directory = Path(pdf_directory)
+        self.pdf_directory.mkdir(parents=True, exist_ok=True)
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+    ) -> List[Article]:
+        """
+        Busca en PDFs locales que coincidan con la query.
+
+        Args:
+            query: Término de búsqueda.
+            max_results: Número máximo de resultados.
+            year_start: Año inicial (opcional).
+            year_end: Año final (opcional).
+
+        Returns:
+            Lista de artículos extraídos de los PDFs.
+        """
+        if pdfplumber is None:
+            raise ImportError("pdfplumber es requerido para usar LocalPdfAdapter")
+
+        articles = []
+
+        # Obtener todos los PDFs en el directorio
+        pdf_files = sorted(self.pdf_directory.glob("*.pdf"))
+
+        for pdf_path in pdf_files:
+            try:
+                article = self._extract_article_from_pdf(pdf_path)
+
+                # Filtrar por año si se especificó
+                if article.year:
+                    if year_start and article.year < year_start:
+                        continue
+                    if year_end and article.year > year_end:
+                        continue
+
+                # Filtrar por query (búsqueda básica en título y abstract)
+                if self._matches_query(article, query):
+                    articles.append(article)
+
+            except Exception as e:
+                # Registrar error pero continuar con otros PDFs
+                print(f"Error procesando {pdf_path.name}: {str(e)}")
+                continue
+
+        # Limitar a max_results
+        return articles[:max_results]
+
+    def _extract_article_from_pdf(self, pdf_path: Path) -> Article:
+        """
+        Extrae metadatos de un PDF.
+
+        Args:
+            pdf_path: Ruta al archivo PDF.
+
+        Returns:
+            Objeto Article con los metadatos extraídos.
+        """
+        with pdfplumber.open(pdf_path) as pdf:
+            # Obtener metadatos del PDF
+            metadata = pdf.metadata or {}
+
+            # Título: primero intenta metadatos, luego extrae del texto
+            title = metadata.get("Title") or self._extract_title_from_text(pdf)
+
+            # Abstract: intenta extraerlo del texto
+            abstract = self._extract_abstract_from_text(pdf)
+
+            # Autores: extrae del texto
+            authors = self._extract_authors_from_text(pdf)
+
+            # Año: extrae del texto
+            year = self._extract_year_from_text(pdf)
+
+            # Crear artículo
+            article = Article(
+                title=title or pdf_path.stem,  # fallback al nombre del archivo
+                authors=authors,
+                year=year,
+                abstract=abstract,
+                source="local_pdf",
+                url=str(pdf_path),  # almacenar ruta local como URL
+                full_data={
+                    "file_path": str(pdf_path),
+                    "file_name": pdf_path.name,
+                    "metadata": metadata,
+                },
+            )
+
+            return article
+
+    @staticmethod
+    def _extract_title_from_text(pdf: "pdfplumber.PDF") -> Optional[str]:
+        """Extrae el título probable del PDF (primeras líneas)."""
+        if not pdf.pages:
+            return None
+
+        first_page = pdf.pages[0]
+        text = first_page.extract_text() or ""
+
+        # Tomar la primera línea no vacía como título
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if lines:
+            # Si la primera línea es muy larga, buscar una más corta
+            title = lines[0]
+            if len(title) > 200:  # si es muy larga, buscar siguiente
+                for line in lines[1:5]:
+                    if 20 < len(line) < 200:
+                        title = line
+                        break
+            return title
+
+        return None
+
+    @staticmethod
+    def _extract_abstract_from_text(pdf: "pdfplumber.PDF") -> Optional[str]:
+        """Extrae el abstract del PDF (busca palabra clave 'abstract')."""
+        full_text = ""
+        for page in pdf.pages[:3]:  # buscar en primeras 3 páginas
+            full_text += page.extract_text() or ""
+
+        # Buscar "abstract" y extraer texto subsiguiente
+        abstract_match = re.search(
+            r"(?:abstract|summary)\s*:?\s*([^.]{100,500}\.)",
+            full_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        if abstract_match:
+            return abstract_match.group(1).strip()
+
+        return None
+
+    @staticmethod
+    def _extract_authors_from_text(pdf: "pdfplumber.PDF") -> List[str]:
+        """Extrae autores probable del PDF (primeras líneas)."""
+        if not pdf.pages:
+            return []
+
+        first_page = pdf.pages[0]
+        text = first_page.extract_text() or ""
+
+        # Buscar líneas que parecen autores (después del título, antes del abstract)
+        lines = text.split("\n")[:20]  # primeras 20 líneas
+        authors = []
+
+        for line in lines:
+            line = line.strip()
+            # Heurística: autores suelen ser nombres con mayúsculas, espacios y posibles afiliaciones
+            if (
+                line
+                and not line.isupper()
+                and 5 < len(line) < 100
+                and any(char.isupper() for char in line)
+                and any(char.islower() for char in line)
+            ):
+                # Filtrar líneas que claramente no son autores
+                if not any(
+                    keyword in line.lower()
+                    for keyword in ["abstract", "introduction", "address", "university"]
+                ):
+                    authors.append(line)
+
+        # Limpiar: eliminar afiliaciones si las hay (texto entre paréntesis)
+        cleaned_authors = []
+        for author in authors[:5]:  # máximo 5 autores extraídos
+            # Eliminar texto entre paréntesis
+            cleaned = re.sub(r"\([^)]*\)", "", author).strip()
+            if cleaned and len(cleaned) > 3:
+                cleaned_authors.append(cleaned)
+
+        return cleaned_authors
+
+    @staticmethod
+    def _extract_year_from_text(pdf: "pdfplumber.PDF") -> Optional[int]:
+        """Extrae el año de publicación del PDF."""
+        full_text = ""
+        for page in pdf.pages[:5]:  # buscar en primeras 5 páginas
+            full_text += page.extract_text() or ""
+
+        # Buscar años entre 1900 y 2100
+        year_matches = re.findall(r"\b(19|20)\d{2}\b", full_text)
+
+        if year_matches:
+            # Tomar el primer año válido encontrado
+            for year_str in year_matches:
+                year = int(year_str)
+                if 1900 <= year <= 2100:
+                    return year
+
+        return None
+
+    @staticmethod
+    def _matches_query(article: Article, query: str) -> bool:
+        """Verifica si el artículo coincide con la query."""
+        query_lower = query.lower()
+
+        # Buscar en título
+        if article.title and query_lower in article.title.lower():
+            return True
+
+        # Buscar en abstract
+        if article.abstract and query_lower in article.abstract.lower():
+            return True
+
+        # Buscar en palabras clave (si las hay)
+        if article.keywords:
+            for keyword in article.keywords:
+                if query_lower in keyword.lower():
+                    return True
+
+        return False
+
+
 # Registro de adaptadores disponibles
 AVAILABLE_ADAPTERS = {
     "crossref": CrossrefAdapter,
     "pubmed": PubMedAdapter,
     "arxiv": ArxivAdapter,
     "scopus": ScopusAdapter,
+    "local_pdf": LocalPdfAdapter,
 }

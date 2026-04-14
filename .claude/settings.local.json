@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python /c/Users/ricar/OneDrive/Documentos/Proyectos/scientific_review/buscar.py --help)",
+      "Bash(python /c/Users/ricar/OneDrive/Documentos/Proyectos/scientific_review/buscar.py \"red snapper population parameters Gulf of California\" --max-results 20 --year-start 2000 --sources crossref pubmed arxiv)",
+      "Bash(python -c ':*)",
+      "Bash(python buscar.py --help)",
+      "Bash(python buscar.py \"red snapper population parameters\" --lugar \"Gulf of California\" --sources crossref pubmed scopus --max-results 5 --year-start 2000)",
+      "Bash(python buscar.py \"Lutjanus peru population parameters Gulf of California\" --sources crossref --max-results 5 --year-start 2000 --min-relevance 0 --download --download-dir outputs/pdfs)",
+      "Bash(pip install:*)",
+      "Bash(python indexar.py --verbose)",
+      "Bash(python indexar.py --stats)",
+      "Bash(python indexar.py --list)",
+      "Bash(python -m unittest discover -s pipeline/embeddings/tests)",
+      "Bash(python -m unittest discover -s pipeline/rag/tests)",
+      "Bash(python -m unittest pipeline.rag.tests.test_rag_phase3 -v)",
+      "Bash(python -c \"import jupyter; print\\(jupyter.__version__\\)\")",
+      "Bash(python -c \"import notebook; print\\(notebook.__version__\\)\")",
+      "Bash(python -m unittest pipeline.rag.tests.test_query_engine -v)",
+      "Bash(python -m unittest pipeline.rag.tests.test_rag_phase3)",
+      "Bash(python buscar_rag.py --stats)",
+      "Bash(python -c \"import anthropic; print\\('OK', anthropic.__version__\\)\")",
+      "Bash(python buscar_rag.py \"¿Qué se sabe sobre la dieta del Lutjanus peru en el Golfo de California?\" --top-k 5)",
+      "Bash(python buscar_rag.py \"cuales son las especies de presas del Lutjanus peru en el Golfo de California?\" --top-k 5)",
+      "Bash(python -m unittest pipeline.rag.tests.test_query_engine)",
+      "Bash(python indexar.py --enrich-metadata)",
+      "Bash(python -m unittest pipeline.rag.tests.test_rag_phase3 pipeline.rag.tests.test_query_engine)",
+      "Bash(python -c \"import networkx; print\\('networkx', networkx.__version__\\)\")",
+      "Bash(python -m unittest pipeline.rag.graph.tests.test_graph_rag -v)",
+      "Bash(python -m unittest pipeline.rag.tests.test_rag_phase3 pipeline.rag.tests.test_query_engine pipeline.rag.graph.tests.test_graph_rag)",
+      "Bash(python construir_grafo.py --verbose)",
+      "Bash(python construir_grafo.py --force --verbose)",
+      "Bash(python buscar_rag.py \"¿Qué presas consume el Lutjanus peru y en qué regiones del Golfo de California fue estudiado?\" --graph --top-k 4)",
+      "Bash(python -c \"import pyvis; print\\('pyvis', pyvis.__version__\\)\")",
+      "Bash(python -c \"import plotly; print\\('plotly', plotly.__version__\\)\")",
+      "Bash(python visualizar_grafo.py --no-browser)",
+      "Bash(python visualizar_grafo.py --tipos Species Location --output outputs/grafo_species_location.html --no-browser)",
+      "Bash(python visualizar_grafo.py --entidad \"Lutjanus peru\" --hops 2 --output outputs/grafo_lutjanus.html --no-browser)",
+      "Bash(python visualizar_grafo.py)",
+      "Bash(python -c \"import webbrowser; from pathlib import Path; webbrowser.open\\(Path\\('outputs/grafo_conocimiento.html'\\).resolve\\(\\).as_uri\\(\\)\\)\")"
+    ]
+  }
+}
