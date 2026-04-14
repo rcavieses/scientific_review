@@ -4,7 +4,7 @@ Modelos de datos para el pipeline RAG de papers científicos.
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 import numpy as np
 
@@ -165,4 +165,53 @@ class RAGSearchResult:
             f"[{self.score:.3f}] {self.chunk_id} | p.{self.page_number}\n"
             f"  {self.title or self.paper_id} ({self.year or 'N/A'}) — {authors_str}\n"
             f"  {self.text[:120]}..."
+        )
+
+
+@dataclass
+class QueryResult:
+    """Resultado completo de una consulta al RAG Query Engine."""
+
+    question: str
+    """Pregunta original del usuario."""
+
+    answer: str
+    """Respuesta generada por Claude con base en los chunks recuperados."""
+
+    sources: List[RAGSearchResult]
+    """Chunks recuperados de FAISS usados para construir el contexto."""
+
+    chunks_used: int
+    """Número de chunks incluidos en el contexto enviado a Claude."""
+
+    model: str
+    """ID del modelo de Claude usado para generar la respuesta."""
+
+    timestamp: datetime = field(default_factory=datetime.now)
+    """Momento en que se generó la respuesta."""
+
+    def format_sources(self) -> str:
+        """Devuelve un bloque de texto con las fuentes citadas, listo para mostrar."""
+        if not self.sources:
+            return "Sin fuentes."
+        lines = []
+        seen_papers: set = set()
+        for r in self.sources:
+            if r.paper_id in seen_papers:
+                continue
+            seen_papers.add(r.paper_id)
+            authors_str = ", ".join(r.authors[:2]) if r.authors else "N/A"
+            if r.authors and len(r.authors) > 2:
+                authors_str += " et al."
+            lines.append(
+                f"  • {r.title or r.paper_id} ({r.year or 'N/A'}) — {authors_str}"
+            )
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        return (
+            f"Pregunta: {self.question}\n\n"
+            f"{self.answer}\n\n"
+            f"Fuentes ({len(set(r.paper_id for r in self.sources))} papers):\n"
+            f"{self.format_sources()}"
         )

@@ -8,17 +8,20 @@ Uso:
     python indexar.py --stats                  # estadísticas del índice existente
     python indexar.py --list                   # papers ya indexados
     python indexar.py --force                  # re-indexar aunque ya estén
+    python indexar.py --enrich-metadata        # añadir título/autores/año/DOI al índice existente
     python indexar.py --chunk-size 1500        # chunks más pequeños
     python indexar.py --provider openai        # embeddings con OpenAI
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from pipeline.rag import RAGPipelineOrchestrator, VectorDBManager
 from pipeline.rag.pdf_extractor import PdfPlumberExtractor
 from pipeline.rag.text_chunker import TextChunker
+from pipeline.rag.metadata_registry import MetadataRegistry
 
 
 def cmd_stats(index_dir: Path) -> None:
@@ -50,6 +53,51 @@ def cmd_stats(index_dir: Path) -> None:
     print(f"  Tamano      : {stats.index_size_mb:.2f} MB")
     print(f"  Actualizado : {stats.last_updated.strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*55}\n")
+
+
+def cmd_enrich_metadata(index_dir: Path, search_results_dir: Path) -> None:
+    """
+    Enriquece el índice existente con metadatos (title, authors, year, doi)
+    sin re-embeddear los chunks. Modifica metadata_store.json directamente.
+    """
+    metadata_file = index_dir / "metadata_store.json"
+    if not metadata_file.exists():
+        print(f"No se encontró índice en {index_dir}")
+        sys.exit(1)
+
+    # Cargar registry
+    registry = MetadataRegistry()
+    n_loaded = registry.load_from_search_results(search_results_dir)
+    print(f"MetadataRegistry: {n_loaded} artículos cargados")
+
+    # Cargar metadata_store
+    with open(metadata_file, encoding="utf-8") as f:
+        store = json.load(f)
+
+    updated = 0
+    not_found: set = set()
+
+    for faiss_id, chunk_dict in store.items():
+        paper_id = chunk_dict.get("paper_id", "")
+        meta = registry.get(paper_id)
+        if meta:
+            chunk_dict["title"] = meta["title"]
+            chunk_dict["authors"] = meta["authors"]
+            chunk_dict["year"] = meta["year"]
+            chunk_dict["doi"] = meta["doi"]
+            updated += 1
+        else:
+            not_found.add(paper_id)
+
+    # Guardar
+    with open(metadata_file, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False, indent=2)
+
+    print(f"Chunks actualizados: {updated} / {len(store)}")
+    if not_found:
+        print(f"Papers sin metadatos ({len(not_found)}):")
+        for pid in sorted(not_found):
+            print(f"  - {pid}")
 
 
 def cmd_list(index_dir: Path) -> None:
@@ -93,6 +141,14 @@ def main() -> None:
     parser.add_argument(
         "--list", action="store_true",
         help="Listar papers ya indexados y salir",
+    )
+    parser.add_argument(
+        "--enrich-metadata", action="store_true",
+        help="Enriquecer chunks existentes con title/authors/year/doi sin re-indexar",
+    )
+    parser.add_argument(
+        "--search-results-dir", default="outputs/search_results",
+        help="Directorio con CSVs de búsqueda para enriquecer metadatos (default: outputs/search_results/)",
     )
 
     # Entrada
@@ -153,6 +209,10 @@ def main() -> None:
         cmd_list(index_dir)
         return
 
+    if args.enrich_metadata:
+        cmd_enrich_metadata(index_dir, Path(args.search_results_dir))
+        return
+
     # Resolver PDFs a indexar
     if args.pdf:
         pdf_paths = [Path(p) for p in args.pdf]
@@ -192,6 +252,12 @@ def main() -> None:
         skip_indexed=not args.force,
         verbose=args.verbose,
     )
+
+    # Cargar metadatos si hay directorio de resultados de búsqueda
+    search_results_dir = Path(args.search_results_dir)
+    if search_results_dir.exists():
+        n = orchestrator.load_metadata_registry(search_results_dir)
+        print(f"MetadataRegistry: {n} artículos disponibles para enriquecer chunks")
 
     stats = orchestrator.run(pdf_paths=pdf_paths)
 

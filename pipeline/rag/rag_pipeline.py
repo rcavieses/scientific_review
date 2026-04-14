@@ -14,6 +14,7 @@ from .models import ChunkData, ChunkVector
 from .pdf_extractor import PDFExtractor, PdfPlumberExtractor, PDFExtractionError
 from .text_chunker import TextChunker
 from .vector_db import VectorDBManager
+from .metadata_registry import MetadataRegistry
 
 
 class RAGPipelineOrchestrator:
@@ -62,6 +63,9 @@ class RAGPipelineOrchestrator:
 
         # DB se inicializa cuando tengamos la dimensión del modelo
         self._db: Optional[VectorDBManager] = None
+
+        # Registro de metadatos (opcional, enriquece title/authors/year/doi en chunks)
+        self._metadata_registry: Optional[MetadataRegistry] = None
 
     # ── API pública ──────────────────────────────────────────────────────────
 
@@ -173,6 +177,20 @@ class RAGPipelineOrchestrator:
                 print(f"    Sin chunks generados para {pdf_path.name}")
             return []
 
+        # 2b. Enriquecer chunks con metadatos si hay registry
+        if self._metadata_registry:
+            meta = self._metadata_registry.get(paper_id)
+            if meta:
+                for chunk in chunks:
+                    chunk.title = meta.get("title")
+                    chunk.authors = meta.get("authors")
+                    chunk.year = meta.get("year")
+                    chunk.doi = meta.get("doi")
+                if self.verbose:
+                    print(f"    Metadatos vinculados: '{meta.get('title', '')[:60]}'")
+            elif self.verbose:
+                print(f"    [metadata] Sin coincidencia para paper_id={paper_id}")
+
         # 3. Generar embeddings en batches
         texts = [c.text for c in chunks]
         vectors = self._embedding_generator.batch_generate(
@@ -198,6 +216,25 @@ class RAGPipelineOrchestrator:
         """Retorna el VectorDBManager (inicializado si hace falta)."""
         self._init_components()
         return self._db
+
+    def load_metadata_registry(self, search_results_dir: Path) -> int:
+        """
+        Carga los metadatos de artículos desde los CSVs de búsqueda.
+
+        Llama a este método antes de run() para que los chunks queden enriquecidos
+        con título, autores, año y DOI.
+
+        Args:
+            search_results_dir: Directorio con los CSV de búsqueda (outputs/search_results/).
+
+        Returns:
+            Número de artículos registrados.
+        """
+        self._metadata_registry = MetadataRegistry()
+        n = self._metadata_registry.load_from_search_results(Path(search_results_dir))
+        if self.verbose:
+            print(f"  MetadataRegistry: {n} artículos cargados desde {search_results_dir}")
+        return n
 
     # ── Métodos internos ────────────────────────────────────────────────────
 
