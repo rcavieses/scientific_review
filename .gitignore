@@ -87,6 +87,16 @@ openai_key*
 *.png
 *.jpg
 *.jpeg
+*.doc
+*.docx
+*.docm
+*.dot
+*.dotx
+*.ppt
+*.pptx
+*.pptm
+*.pot
+*.potx
 *.csv
 *.log
 

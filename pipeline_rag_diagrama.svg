@@ -1,0 +1,167 @@
+<svg viewBox="0 0 300 920" xmlns="http://www.w3.org/2000/svg" role="img" width="300" height="920" font-family="Arial, sans-serif">
+  <title>Diagrama de flujo del Pipeline RAG/GraphRAG</title>
+  <desc>Flujo de 5 fases: Búsqueda multi-fuente → Normalización y Embeddings → Indexación FAISS → Motor RAG → GraphRAG, con rama paralela de FishBase que converge en la salida ATLANTIS.</desc>
+
+  <rect width="300" height="920" fill="#F4F8FA" rx="6"/>
+
+  <text x="150" y="22" text-anchor="middle" font-size="11" font-weight="700" fill="#05314A" letter-spacing="0.5">PIPELINE RAG / GraphRAG</text>
+  <line x1="20" y1="29" x2="280" y2="29" stroke="#CBD5E1" stroke-width="1"/>
+
+  <!-- FASE 0 -->
+  <rect x="20" y="38" width="260" height="52" rx="5" fill="#0D6986"/>
+  <text x="30" y="56" font-size="9" font-weight="700" fill="#1BB8B0" letter-spacing="0.8">FASE 0</text>
+  <text x="30" y="69" font-size="10.5" font-weight="700" fill="#FFFFFF">Búsqueda Multi-fuente</text>
+  <rect x="28" y="75" width="42" height="11" rx="3" fill="#05314A"/>
+  <text x="49" y="83.5" text-anchor="middle" font-size="8" fill="#1BB8B0">Crossref</text>
+  <rect x="74" y="75" width="36" height="11" rx="3" fill="#05314A"/>
+  <text x="92" y="83.5" text-anchor="middle" font-size="8" fill="#1BB8B0">PubMed</text>
+  <rect x="114" y="75" width="30" height="11" rx="3" fill="#05314A"/>
+  <text x="129" y="83.5" text-anchor="middle" font-size="8" fill="#1BB8B0">arXiv</text>
+  <rect x="148" y="75" width="32" height="11" rx="3" fill="#05314A"/>
+  <text x="164" y="83.5" text-anchor="middle" font-size="8" fill="#1BB8B0">Scopus</text>
+  <rect x="184" y="75" width="44" height="11" rx="3" fill="#05314A"/>
+  <text x="206" y="83.5" text-anchor="middle" font-size="8" fill="#1BB8B0">PDF Local</text>
+
+  <line x1="150" y1="90" x2="150" y2="108" stroke="#0D6986" stroke-width="2"/>
+  <polygon points="143,106 150,118 157,106" fill="#0D6986"/>
+  <text x="158" y="102" font-size="8" fill="#64748B" font-style="italic">CSV + PDFs</text>
+
+  <!-- FASES 1-2 -->
+  <rect x="20" y="118" width="260" height="52" rx="5" fill="#1C7293"/>
+  <text x="30" y="136" font-size="9" font-weight="700" fill="#A5F3EF" letter-spacing="0.8">FASES 1–2</text>
+  <text x="30" y="149" font-size="10.5" font-weight="700" fill="#FFFFFF">Normalización + Embeddings</text>
+  <rect x="28" y="155" width="76" height="11" rx="3" fill="#05314A"/>
+  <text x="66" y="163.5" text-anchor="middle" font-size="8" fill="#A5F3EF">InformationExtractor</text>
+  <rect x="108" y="155" width="62" height="11" rx="3" fill="#05314A"/>
+  <text x="139" y="163.5" text-anchor="middle" font-size="8" fill="#A5F3EF">TextProcessor</text>
+  <rect x="174" y="155" width="80" height="11" rx="3" fill="#05314A"/>
+  <text x="214" y="163.5" text-anchor="middle" font-size="8" fill="#A5F3EF">EmbeddingGenerator</text>
+
+  <line x1="150" y1="170" x2="150" y2="188" stroke="#1C7293" stroke-width="2"/>
+  <polygon points="143,186 150,198 157,186" fill="#1C7293"/>
+  <text x="158" y="182" font-size="8" fill="#64748B" font-style="italic">384-d vectors</text>
+
+  <!-- FASE 3 -->
+  <rect x="20" y="198" width="260" height="52" rx="5" fill="#065A82"/>
+  <text x="30" y="216" font-size="9" font-weight="700" fill="#1BB8B0" letter-spacing="0.8">FASE 3</text>
+  <text x="30" y="229" font-size="10.5" font-weight="700" fill="#FFFFFF">Extracción PDF + Índice FAISS</text>
+  <rect x="28" y="235" width="68" height="11" rx="3" fill="#021E2E"/>
+  <text x="62" y="243.5" text-anchor="middle" font-size="8" fill="#1BB8B0">PdfPlumberExtractor</text>
+  <rect x="100" y="235" width="54" height="11" rx="3" fill="#021E2E"/>
+  <text x="127" y="243.5" text-anchor="middle" font-size="8" fill="#1BB8B0">TextChunker</text>
+  <rect x="158" y="235" width="64" height="11" rx="3" fill="#021E2E"/>
+  <text x="190" y="243.5" text-anchor="middle" font-size="8" fill="#1BB8B0">VectorDBManager</text>
+
+  <line x1="150" y1="250" x2="150" y2="268" stroke="#065A82" stroke-width="2"/>
+  <polygon points="143,266 150,278 157,266" fill="#065A82"/>
+  <text x="158" y="262" font-size="8" fill="#64748B" font-style="italic">index.faiss</text>
+
+  <!-- DECISION -->
+  <polygon points="150,278 230,308 150,338 70,308" fill="#FFFFFF" stroke="#0D6986" stroke-width="2"/>
+  <text x="150" y="304" text-anchor="middle" font-size="9" font-weight="700" fill="#05314A">¿Modo</text>
+  <text x="150" y="316" text-anchor="middle" font-size="9" font-weight="700" fill="#05314A">GraphRAG?</text>
+
+  <line x1="70" y1="308" x2="40" y2="308" stroke="#0D6986" stroke-width="1.5"/>
+  <line x1="40" y1="308" x2="40" y2="370" stroke="#0D6986" stroke-width="1.5"/>
+  <polygon points="33,368 40,380 47,368" fill="#0D6986"/>
+  <text x="38" y="298" font-size="8" fill="#0D6986" font-weight="700">NO</text>
+
+  <line x1="230" y1="308" x2="262" y2="308" stroke="#1BB8B0" stroke-width="1.5"/>
+  <line x1="262" y1="308" x2="262" y2="410" stroke="#1BB8B0" stroke-width="1.5"/>
+  <polygon points="255,408 262,420 269,408" fill="#1BB8B0"/>
+  <text x="234" y="298" font-size="8" fill="#1BB8B0" font-weight="700">SÍ</text>
+
+  <!-- FASE 4 -->
+  <rect x="12" y="380" width="128" height="58" rx="5" fill="#0D6986"/>
+  <text x="20" y="396" font-size="8.5" font-weight="700" fill="#A5F3EF" letter-spacing="0.6">FASE 4 · RAG</text>
+  <text x="20" y="408" font-size="9.5" font-weight="700" fill="#FFFFFF">Motor RAG</text>
+  <text x="20" y="420" font-size="8" fill="#D0EEF5">embed(pregunta)</text>
+  <text x="20" y="431" font-size="8" fill="#D0EEF5">FAISS.search(top_k=5)</text>
+  <rect x="18" y="424" width="62" height="10" rx="3" fill="#05314A"/>
+  <text x="49" y="431.5" text-anchor="middle" font-size="7.5" fill="#1BB8B0">Claude Sonnet</text>
+
+  <!-- FASE 5 -->
+  <rect x="160" y="420" width="128" height="68" rx="5" fill="#028090"/>
+  <text x="168" y="436" font-size="8.5" font-weight="700" fill="#A5F3EF" letter-spacing="0.6">FASE 5 · GraphRAG</text>
+  <text x="168" y="448" font-size="9.5" font-weight="700" fill="#FFFFFF">Grafo Conocimiento</text>
+  <text x="168" y="460" font-size="8" fill="#D0EEF5">Entidades + Relaciones</text>
+  <text x="168" y="471" font-size="8" fill="#D0EEF5">NetworkX + BFS</text>
+  <rect x="166" y="474" width="56" height="10" rx="3" fill="#05314A"/>
+  <text x="194" y="481.5" text-anchor="middle" font-size="7.5" fill="#1BB8B0">Claude Haiku</text>
+  <rect x="226" y="474" width="56" height="10" rx="3" fill="#05314A"/>
+  <text x="254" y="481.5" text-anchor="middle" font-size="7.5" fill="#1BB8B0">Claude Sonnet</text>
+
+  <!-- Converge arrows -->
+  <line x1="76" y1="438" x2="76" y2="518" stroke="#0D6986" stroke-width="1.5"/>
+  <line x1="76" y1="518" x2="148" y2="518" stroke="#0D6986" stroke-width="1.5"/>
+  <line x1="224" y1="488" x2="224" y2="518" stroke="#028090" stroke-width="1.5"/>
+  <line x1="224" y1="518" x2="152" y2="518" stroke="#028090" stroke-width="1.5"/>
+  <polygon points="143,511 150,523 157,511" fill="#05314A"/>
+
+  <!-- QueryResult -->
+  <rect x="60" y="523" width="180" height="44" rx="5" fill="#FFFFFF" stroke="#0D6986" stroke-width="1.5"/>
+  <text x="150" y="539" text-anchor="middle" font-size="9" font-weight="700" fill="#05314A">QueryResult</text>
+  <text x="150" y="551" text-anchor="middle" font-size="8" fill="#64748B">answer · sources · citations</text>
+  <text x="150" y="561" text-anchor="middle" font-size="8" fill="#64748B">timestamp · model</text>
+
+  <line x1="150" y1="567" x2="150" y2="583" stroke="#05314A" stroke-width="2"/>
+  <polygon points="143,581 150,593 157,581" fill="#05314A"/>
+
+  <!-- PARALLEL RAIL -->
+  <line x1="272" y1="38" x2="272" y2="640" stroke="#94A3B8" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="272" y="34" text-anchor="middle" font-size="7.5" fill="#94A3B8" font-weight="700">PARALELO</text>
+
+  <!-- FishBase -->
+  <rect x="236" y="590" width="52" height="56" rx="4" fill="#2C5F2D" opacity="0.92"/>
+  <text x="262" y="606" text-anchor="middle" font-size="7.5" font-weight="700" fill="#FFFFFF">Fish</text>
+  <text x="262" y="617" text-anchor="middle" font-size="7.5" font-weight="700" fill="#97BC62">Base</text>
+  <text x="262" y="628" text-anchor="middle" font-size="7" fill="#D1EFC0">K·L∞·t₀</text>
+  <text x="262" y="638" text-anchor="middle" font-size="7" fill="#D1EFC0">a·b·QB</text>
+
+  <line x1="236" y1="618" x2="212" y2="618" stroke="#2C5F2D" stroke-width="1.5"/>
+  <polygon points="214,612 202,618 214,624" fill="#2C5F2D"/>
+
+  <!-- ParameterSet -->
+  <rect x="60" y="593" width="140" height="50" rx="5" fill="#FFFFFF" stroke="#2C5F2D" stroke-width="1.5"/>
+  <text x="130" y="610" text-anchor="middle" font-size="9" font-weight="700" fill="#1C4A1D">ParameterSet</text>
+  <text x="130" y="622" text-anchor="middle" font-size="8" fill="#64748B">get_best(param)</text>
+  <text x="130" y="634" text-anchor="middle" font-size="8" fill="#64748B">to_summary_dict()</text>
+
+  <!-- Missing → RAG fallback -->
+  <text x="30" y="628" text-anchor="middle" font-size="7.5" fill="#B85042" font-weight="700">missing?</text>
+  <line x1="60" y1="618" x2="46" y2="618" stroke="#B85042" stroke-width="1.2" stroke-dasharray="3,2"/>
+  <line x1="46" y1="618" x2="46" y2="535" stroke="#B85042" stroke-width="1.2" stroke-dasharray="3,2"/>
+  <polygon points="40,537 46,525 52,537" fill="#B85042"/>
+  <text x="13" y="570" font-size="7" fill="#B85042" font-style="italic">→ RAG</text>
+
+  <!-- Merge to ATLANTIS -->
+  <line x1="130" y1="643" x2="130" y2="658" stroke="#2C5F2D" stroke-width="1.5"/>
+  <line x1="150" y1="643" x2="150" y2="658" stroke="#05314A" stroke-width="1.5"/>
+  <line x1="130" y1="658" x2="150" y2="668" stroke="#2C5F2D" stroke-width="1.2"/>
+  <line x1="150" y1="658" x2="150" y2="668" stroke="#05314A" stroke-width="1.2"/>
+  <polygon points="143,666 150,678 157,666" fill="#05314A"/>
+
+  <!-- ATLANTIS -->
+  <rect x="50" y="678" width="200" height="52" rx="5" fill="#1F3864"/>
+  <text x="150" y="697" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">Salida ATLANTIS</text>
+  <text x="150" y="710" text-anchor="middle" font-size="8.5" fill="#A5C8F0">atlantis_params.csv</text>
+  <text x="150" y="722" text-anchor="middle" font-size="8" fill="#7BA7D0">valor · unidad · fuente · confianza</text>
+
+  <!-- LEGEND -->
+  <line x1="20" y1="748" x2="280" y2="748" stroke="#CBD5E1" stroke-width="1"/>
+  <text x="150" y="762" text-anchor="middle" font-size="8.5" font-weight="700" fill="#05314A" letter-spacing="0.4">LEYENDA</text>
+  <rect x="24" y="770" width="10" height="10" rx="2" fill="#0D6986"/>
+  <text x="38" y="779" font-size="8" fill="#374151">Fases RAG (0–4)</text>
+  <rect x="24" y="786" width="10" height="10" rx="2" fill="#028090"/>
+  <text x="38" y="795" font-size="8" fill="#374151">Fase 5 GraphRAG</text>
+  <rect x="24" y="802" width="10" height="10" rx="2" fill="#2C5F2D"/>
+  <text x="38" y="811" font-size="8" fill="#374151">Conector FishBase</text>
+  <rect x="24" y="818" width="10" height="10" rx="2" fill="#1F3864"/>
+  <text x="38" y="827" font-size="8" fill="#374151">Salida consolidada</text>
+  <line x1="130" y1="775" x2="160" y2="775" stroke="#B85042" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <text x="166" y="779" font-size="8" fill="#374151">Fallback a RAG</text>
+  <line x1="130" y1="791" x2="160" y2="791" stroke="#94A3B8" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="166" y="795" font-size="8" fill="#374151">Flujo paralelo</text>
+  <polygon points="130,800 138,800 134,806" fill="#0D6986"/>
+  <text x="142" y="806" font-size="8" fill="#374151">Decisión</text>
+</svg>

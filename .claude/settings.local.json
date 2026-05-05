@@ -37,7 +37,27 @@
       "Bash(python visualizar_grafo.py --tipos Species Location --output outputs/grafo_species_location.html --no-browser)",
       "Bash(python visualizar_grafo.py --entidad \"Lutjanus peru\" --hops 2 --output outputs/grafo_lutjanus.html --no-browser)",
       "Bash(python visualizar_grafo.py)",
-      "Bash(python -c \"import webbrowser; from pathlib import Path; webbrowser.open\\(Path\\('outputs/grafo_conocimiento.html'\\).resolve\\(\\).as_uri\\(\\)\\)\")"
+      "Bash(python -c \"import webbrowser; from pathlib import Path; webbrowser.open\\(Path\\('outputs/grafo_conocimiento.html'\\).resolve\\(\\).as_uri\\(\\)\\)\")",
+      "Bash(python buscar.py \"Sardinops sagax fisheries population dynamics\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Dosidicus gigas jumbo squid fisheries\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Thunnus albacares yellowfin tuna population\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Thunnus obesus bigeye tuna stock assessment\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Sarda chiliensis bonito fisheries dynamics\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Lutjanus peru red snapper population dynamics\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Mycteroperca grouper fisheries management\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Litopenaeus vannamei white shrimp aquaculture\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Scomber japonicus mackerel stock assessment\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Coryphaena hippurus dorado mahi-mahi migration\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Trachurus murphyi jack mackerel stock\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python buscar.py \"Pterois lionfish invasive species control\" --lugar \"Gulf of California\" --max-results 15 --year-start 2015)",
+      "Bash(python pipeline_especies.py --especie 1)",
+      "Bash(python pipeline_especies.py)",
+      "Bash(awk '{print $9, \"\\(\" $5 \"\\)\"}')",
+      "Bash(python -c \"import json; f=open\\('outputs/rag_index/metadata_store.json'\\); m=json.load\\(f\\); print\\(f'Papers en metadata: {len\\(m\\)}'\\); print\\('Papers:'\\); [print\\(f'  - {p}'\\) for p in list\\(m.keys\\(\\)\\)[:10]]\")",
+      "Bash(python descargar_indexar_completo.py)",
+      "Bash(python -c \"import json; cfg=json.load\\(open\\('outputs/rag_index/index_config.json'\\)\\); print\\(f' Chunks: {cfg.get\\(\\\\\"total_chunks\\\\\", \\\\\"N/A\\\\\"\\)}'\\)\")",
+      "Bash(python consultar_parametros_rag.py --skip-download --skip-index --top-k 5)",
+      "Bash(tee salida_rag_expandida.log)"
     ]
   }
 }
