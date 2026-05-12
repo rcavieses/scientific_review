@@ -1,7 +1,8 @@
 """
-Extractor de entidades y relaciones desde chunks científicos usando Claude API.
+Extractor de entidades y relaciones desde chunks científicos usando LLM.
 
-Usa claude-haiku (modelo ligero) para procesar cada chunk eficientemente.
+Usa un modelo ligero (claude-haiku o similar) para procesar cada chunk eficientemente.
+Soporta múltiples proveedores de LLM via LLMProvider.
 La salida es JSON estructurado que luego ingesta KnowledgeGraphStore.
 """
 
@@ -9,9 +10,9 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pipeline.llm import LLMProvider, get_llm_provider
 from pipeline.rag.models import ChunkData
 
 
@@ -55,14 +56,18 @@ Rules:
 
 class GraphExtractor:
     """
-    Extrae entidades y relaciones de chunks científicos vía Claude API.
+    Extrae entidades y relaciones de chunks científicos vía LLM.
+
+    Soporta múltiples proveedores de LLM (Claude API, Ollama, etc.) via LLMProvider.
 
     Args:
-        model: Modelo de Claude a usar (default: claude-haiku-4-5-20251001 para eficiencia).
-        max_tokens: Límite de tokens en la respuesta (default: 1024).
-        request_delay: Segundos entre llamadas a la API (default: 0.3).
+        model: Modelo a usar (default: "claude-haiku-4-5-20251001" para eficiencia).
+        max_tokens: Límite de tokens en la respuesta (default: 4096).
+        request_delay: Segundos entre llamadas al LLM (default: 0.3).
         verbose: Mostrar progreso detallado.
-        client: Cliente anthropic.Anthropic() inyectable (para tests con mocks).
+        llm_provider: LLMProvider inyectable (default: None, usa Claude).
+        client: (Deprecated) Cliente anthropic.Anthropic() inyectable.
+                Mantener solo para backward compat con tests existentes.
     """
 
     def __init__(
@@ -71,19 +76,21 @@ class GraphExtractor:
         max_tokens: int = 4096,
         request_delay: float = 0.3,
         verbose: bool = False,
+        llm_provider: Optional[LLMProvider] = None,
         client=None,
     ):
         self.model = model
         self.max_tokens = max_tokens
         self.request_delay = request_delay
         self.verbose = verbose
+        self._llm_provider = llm_provider
         self._client = client
 
     # ── API pública ──────────────────────────────────────────────────────────
 
     def extract_from_chunk(self, chunk: ChunkData) -> Dict[str, Any]:
         """
-        Llama a Claude una vez para extraer entidades y relaciones del chunk.
+        Llama al LLM una vez para extraer entidades y relaciones del chunk.
 
         Args:
             chunk: Chunk de texto científico.
@@ -93,21 +100,15 @@ class GraphExtractor:
             En caso de JSON inválido retorna {"entities": [], "relations": []}.
 
         Raises:
-            RuntimeError: Si la llamada a la API falla.
+            RuntimeError: Si la llamada al LLM falla.
         """
         user_message = self._build_user_message(chunk)
 
         try:
-            client = self._get_client()
-            message = client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            raw_text = message.content[0].text.strip()
+            provider = self._get_llm_provider()
+            raw_text = provider.generate(_SYSTEM_PROMPT, user_message, self.max_tokens).strip()
         except Exception as e:
-            raise RuntimeError(f"Error al llamar a Claude API: {e}") from e
+            raise RuntimeError(f"Error al llamar al LLM: {e}") from e
 
         return self._parse_response(raw_text, chunk.chunk_id)
 
@@ -207,27 +208,19 @@ class GraphExtractor:
 
     # ── Inicialización lazy ──────────────────────────────────────────────────
 
-    def _get_client(self):
-        """Retorna el cliente Anthropic, buscando la API key en env o secrets/."""
-        if self._client is None:
-            try:
-                import anthropic
-            except ImportError as e:
-                raise ImportError(
-                    "El paquete 'anthropic' no está instalado. "
-                    "Instálalo con: pip install anthropic"
-                ) from e
+    def _get_llm_provider(self) -> LLMProvider:
+        """
+        Retorna el proveedor de LLM, inicializándolo si es necesario.
 
-            import os
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
-                secrets_path = Path("secrets/anthropic-apikey")
-                if secrets_path.exists():
-                    api_key = secrets_path.read_text().strip()
-            if not api_key:
-                raise RuntimeError(
-                    "No se encontró la API key de Anthropic. "
-                    "Define ANTHROPIC_API_KEY o crea el archivo secrets/anthropic-apikey."
-                )
-            self._client = anthropic.Anthropic(api_key=api_key)
-        return self._client
+        Si se pasó llm_provider en __init__, lo retorna.
+        Si se pasó client en __init__, lo usa como AnthropicProvider (backward compat).
+        Si no, crea un AnthropicProvider lazy con el modelo configurado.
+        """
+        if self._llm_provider is None:
+            from pipeline.llm import AnthropicProvider
+            self._llm_provider = AnthropicProvider(
+                model=self.model,
+                client=self._client,
+                verbose=self.verbose
+            )
+        return self._llm_provider

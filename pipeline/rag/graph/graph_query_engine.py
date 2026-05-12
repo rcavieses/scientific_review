@@ -7,17 +7,19 @@ Flujo por cada pregunta:
   3. get_neighborhood()                     → vecindad de cada entidad
   4. VectorDBManager.search()               → chunks semánticos relevantes
   5. _build_combined_context()              → grafo + fragmentos → prompt
-  6. Claude API                             → respuesta con fuentes y relaciones
+  6. LLMProvider.generate()                 → respuesta con fuentes y relaciones (Claude o Ollama)
   7. GraphQueryResult                       → respuesta + metadatos
+
+Soporta múltiples proveedores de LLM via LLMProvider.
 """
 
 from __future__ import annotations
 
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import List, Optional
 
+from pipeline.llm import LLMProvider, get_llm_provider
 from pipeline.rag.models import RAGSearchResult
 from pipeline.rag.vector_db import VectorDBManager
 from .graph_store import KnowledgeGraphStore
@@ -39,18 +41,22 @@ class GraphQueryEngine:
     """
     Motor de consultas que combina el grafo de conocimiento con búsqueda vectorial.
 
+    Soporta múltiples proveedores de LLM (Claude API, Ollama, etc.) via LLMProvider.
+
     Args:
         graph_store: KnowledgeGraphStore con el grafo ya cargado.
         vector_db: VectorDBManager con el índice FAISS ya cargado.
         embedding_generator: EmbeddingGenerator para vectorizar la pregunta.
-        model: Modelo de Claude para la respuesta (default: claude-sonnet-4-6).
+        model: Modelo a usar (default: "claude-sonnet-4-6" para Claude).
         top_k: Chunks FAISS a recuperar (default: 5).
         max_tokens: Límite de tokens en la respuesta (default: 1024).
         min_score: Score mínimo para chunks FAISS (default: 0.2).
         graph_hops: Profundidad de vecindad en el grafo (default: 1).
         max_graph_entities: Máximo de entidades del grafo en el contexto (default: 3).
         verbose: Debug detallado.
-        client: Cliente anthropic.Anthropic() inyectable para tests.
+        llm_provider: LLMProvider inyectable (default: None, usa Claude).
+        client: (Deprecated) Cliente anthropic.Anthropic() inyectable.
+                Mantener solo para backward compat con tests existentes.
     """
 
     def __init__(
@@ -65,6 +71,7 @@ class GraphQueryEngine:
         graph_hops: int = 1,
         max_graph_entities: int = 3,
         verbose: bool = False,
+        llm_provider: Optional[LLMProvider] = None,
         client=None,
     ):
         self.graph_store = graph_store
@@ -78,6 +85,7 @@ class GraphQueryEngine:
         self.verbose = verbose
 
         self._embedding_generator = embedding_generator
+        self._llm_provider = llm_provider
         self._client = client
 
     # ── API pública ──────────────────────────────────────────────────────────
@@ -121,8 +129,8 @@ class GraphQueryEngine:
         # 3. Construir contexto combinado
         context = self._build_combined_context(graph_results, vector_results)
 
-        # 4. Llamar a Claude
-        answer = self._call_claude(question, context)
+        # 4. Llamar al LLM
+        answer = self._call_llm(question, context)
 
         return GraphQueryResult(
             question=question,
@@ -216,46 +224,36 @@ class GraphQueryEngine:
 
         return "\n".join(parts)
 
-    # ── Llamada a Claude ─────────────────────────────────────────────────────
+    # ── Llamada al LLM ──────────────────────────────────────────────────────
 
-    def _call_claude(self, question: str, context: str) -> str:
-        """Envía el contexto + pregunta a Claude y retorna la respuesta."""
+    def _call_llm(self, question: str, context: str) -> str:
+        """Envía el contexto + pregunta al LLM y retorna la respuesta."""
         user_message = f"{context}\n\n---\n\n**Pregunta:** {question}"
 
         try:
-            client = self._get_client()
-            message = client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            return message.content[0].text
+            provider = self._get_llm_provider()
+            return provider.generate(_SYSTEM_PROMPT, user_message, self.max_tokens)
         except Exception as e:
-            raise RuntimeError(f"Error al llamar a Claude API: {e}") from e
+            raise RuntimeError(f"Error al llamar al LLM: {e}") from e
 
     # ── Inicialización lazy ──────────────────────────────────────────────────
 
-    def _get_client(self):
-        if self._client is None:
-            try:
-                import anthropic
-            except ImportError as e:
-                raise ImportError("Instala el paquete 'anthropic': pip install anthropic") from e
+    def _get_llm_provider(self) -> LLMProvider:
+        """
+        Retorna el proveedor de LLM, inicializándolo si es necesario.
 
-            import os
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
-                secrets_path = Path("secrets/anthropic-apikey")
-                if secrets_path.exists():
-                    api_key = secrets_path.read_text().strip()
-            if not api_key:
-                raise RuntimeError(
-                    "No se encontró la API key de Anthropic. "
-                    "Define ANTHROPIC_API_KEY o crea secrets/anthropic-apikey."
-                )
-            self._client = anthropic.Anthropic(api_key=api_key)
-        return self._client
+        Si se pasó llm_provider en __init__, lo retorna.
+        Si se pasó client en __init__, lo usa como AnthropicProvider (backward compat).
+        Si no, crea un AnthropicProvider lazy con el modelo configurado.
+        """
+        if self._llm_provider is None:
+            from pipeline.llm import AnthropicProvider
+            self._llm_provider = AnthropicProvider(
+                model=self.model,
+                client=self._client,
+                verbose=self.verbose
+            )
+        return self._llm_provider
 
     def _get_embedding_generator(self):
         if self._embedding_generator is None:
