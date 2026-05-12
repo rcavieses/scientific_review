@@ -44,9 +44,20 @@ def main():
         help="Similitud coseno mínima para incluir un chunk (default: 0.2)",
     )
     parser.add_argument(
+        "--llm-provider",
+        default="claude",
+        help="Proveedor de LLM: 'claude' o 'ollama' (default: claude)",
+    )
+    parser.add_argument(
         "--model",
+        dest="llm_model",
         default="claude-sonnet-4-6",
-        help="Modelo de Claude a usar (default: claude-sonnet-4-6)",
+        help="Modelo a usar (default: claude-sonnet-4-6 para Claude, llama3 para Ollama)",
+    )
+    parser.add_argument(
+        "--ollama-host",
+        default="http://localhost:11434",
+        help="URL del servidor Ollama (default: http://localhost:11434)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -129,6 +140,15 @@ def main():
                 print(f"    • {p}")
         return
 
+    # Crear proveedor de LLM
+    from pipeline.llm import get_llm_provider
+    llm_provider = get_llm_provider(
+        provider=args.llm_provider,
+        model=args.llm_model,
+        host=args.ollama_host if args.llm_provider == "ollama" else None,
+        verbose=args.verbose
+    )
+
     # Inicializar Query Engine (RAG simple o GraphRAG)
     if args.graph:
         from pipeline.rag.graph import KnowledgeGraphStore, GraphQueryEngine
@@ -143,29 +163,31 @@ def main():
         engine = GraphQueryEngine(
             graph_store=graph_store,
             vector_db=db,
-            model=args.model,
+            model=args.llm_model,
             top_k=args.top_k,
             max_tokens=args.max_tokens,
             min_score=args.min_score,
             graph_hops=args.graph_hops,
+            llm_provider=llm_provider,
             verbose=args.verbose,
         )
         print(f"Índice cargado: {stats.total_chunks} chunks de {stats.total_papers} papers")
         print(f"Grafo cargado: {graph_stats.total_entities} entidades, "
               f"{graph_stats.total_relations} relaciones")
-        print(f"Modo: GraphRAG | Modelo: {args.model} | top_k={args.top_k}\n")
+        print(f"Modo: GraphRAG | Proveedor: {args.llm_provider} | Modelo: {args.llm_model} | top_k={args.top_k}\n")
     else:
         from pipeline.rag.query_engine import RAGQueryEngine
         engine = RAGQueryEngine(
             vector_db=db,
-            model=args.model,
+            model=args.llm_model,
             top_k=args.top_k,
             max_tokens=args.max_tokens,
             min_score=args.min_score,
+            llm_provider=llm_provider,
             verbose=args.verbose,
         )
         print(f"Índice cargado: {stats.total_chunks} chunks de {stats.total_papers} papers")
-        print(f"Modelo: {args.model} | top_k={args.top_k} | min_score={args.min_score}\n")
+        print(f"Proveedor: {args.llm_provider} | Modelo: {args.llm_model} | top_k={args.top_k} | min_score={args.min_score}\n")
 
     # ── Modo interactivo ──────────────────────────────────────────────────────
     if args.interactive:

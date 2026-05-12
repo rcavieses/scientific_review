@@ -27,6 +27,11 @@ try:
 except ImportError:
     OpenAI = None
 
+try:
+    import ollama
+except ImportError:
+    ollama = None
+
 
 class EmbeddingGenerator(ABC):
     """
@@ -410,6 +415,117 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
         return self.model_name
 
 
+class OllamaEmbeddingGenerator(EmbeddingGenerator):
+    """
+    Generador de embeddings usando modelos locales de Ollama.
+
+    Permite ejecutar embeddings 100% offline sin costo de API,
+    con máxima privacidad. Requiere Ollama instalado y corriendo.
+
+    Modelos recomendados:
+    - "nomic-embed-text" (768 dims) — especializado en embeddings
+    - "mxbai-embed-large" (1024 dims) — alta calidad
+    - "all-minilm" (384 dims) — ligero, compatible con FAISS existente
+    """
+
+    def __init__(
+        self,
+        model_name: str = "nomic-embed-text",
+        host: str = "http://localhost:11434",
+        verbose: bool = False,
+    ):
+        """
+        Inicializa el generador de embeddings con Ollama.
+
+        Args:
+            model_name: Modelo de Ollama a usar.
+            host: URL del servidor Ollama.
+            verbose: Mostrar mensajes de debug.
+
+        Raises:
+            ImportError: Si ollama no está instalado.
+            RuntimeError: Si no se puede conectar a Ollama.
+        """
+        if ollama is None:
+            raise ImportError(
+                "ollama no está instalado. "
+                "Instala con: pip install ollama\n"
+                "Descarga Ollama desde: https://ollama.com"
+            )
+
+        self.model_name = model_name
+        self.host = host
+        self.verbose = verbose
+        self._client = ollama.Client(host=host)
+
+        if verbose:
+            try:
+                models = self._client.list()
+                available_models = [m["name"] for m in models.get("models", [])]
+                if model_name in available_models:
+                    print(f"[OllamaEmbeddingGenerator] Modelo '{model_name}' disponible")
+                else:
+                    logger.warning(f"Modelo '{model_name}' no encontrado en Ollama")
+            except Exception as e:
+                logger.warning(f"Error verificando modelos en Ollama: {e}")
+
+    def generate(self, texts: List[str]) -> np.ndarray:
+        """
+        Genera embeddings usando Ollama.
+
+        Args:
+            texts: Lista de textos a embedificar.
+
+        Returns:
+            Array numpy de embeddings (float32).
+        """
+        if not texts:
+            raise ValueError("Lista de textos vacía")
+
+        try:
+            embeddings = []
+            for text in texts:
+                response = self._client.embeddings(
+                    model=self.model_name,
+                    prompt=text,
+                )
+                embedding = response["embedding"]
+                embeddings.append(embedding)
+
+            result = np.array(embeddings, dtype=np.float32)
+            return result
+        except Exception as e:
+            raise RuntimeError(f"Error generando embeddings con Ollama: {e}") from e
+
+    def get_dimension(self) -> int:
+        """
+        Retorna la dimensión de los embeddings del modelo.
+
+        Genera un embedding de prueba si es necesario.
+        """
+        try:
+            response = self._client.embeddings(
+                model=self.model_name,
+                prompt="test",
+            )
+            return len(response["embedding"])
+        except Exception as e:
+            raise RuntimeError(f"Error obteniendo dimensión del modelo: {e}") from e
+
+    def get_model_name(self) -> str:
+        """Retorna nombre del modelo."""
+        return self.model_name
+
+    def get_info(self) -> Dict[str, Any]:
+        """Obtiene información completa del generador."""
+        info = super().get_info()
+        info.update({
+            "host": self.host,
+            "dimension": self.get_dimension(),
+        })
+        return info
+
+
 def get_embedding_generator(
     provider: str = "local",
     model: Optional[str] = None,
@@ -420,10 +536,14 @@ def get_embedding_generator(
     Factory function para obtener un generador de embeddings.
 
     Args:
-        provider: "local", "openai", o "huggingface".
-        model: Nombre del modelo (defaults según provider).
+        provider: "local", "openai", u "ollama".
+        model: Nombre del modelo (defaults según provider):
+               - local: "all-MiniLM-L6-v2"
+               - openai: "text-embedding-3-small"
+               - ollama: "nomic-embed-text"
         verbose: Mostrar mensajes.
-        **kwargs: Argumentos adicionales para el generador.
+        **kwargs: Argumentos adicionales para el generador
+                 (host="..." para Ollama, api_key="..." para OpenAI, etc.)
 
     Returns:
         Instancia de EmbeddingGenerator.
@@ -431,16 +551,22 @@ def get_embedding_generator(
     Raises:
         ValueError: Si provider no es válido.
     """
-    if provider == "local":
+    provider_lower = provider.lower().strip()
+
+    if provider_lower == "local":
         model = model or "all-MiniLM-L6-v2"
         return LocalEmbeddingGenerator(model, verbose=verbose, **kwargs)
 
-    elif provider == "openai":
+    elif provider_lower == "openai":
         model = model or "text-embedding-3-small"
         return OpenAIEmbeddingGenerator(model, verbose=verbose, **kwargs)
+
+    elif provider_lower == "ollama":
+        model = model or "nomic-embed-text"
+        return OllamaEmbeddingGenerator(model_name=model, verbose=verbose, **kwargs)
 
     else:
         raise ValueError(
             f"Provider inválido: {provider}. "
-            f"Opciones: 'local', 'openai'"
+            f"Opciones: 'local', 'openai', 'ollama'"
         )

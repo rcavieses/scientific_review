@@ -38,8 +38,20 @@ def main():
         help="Directorio donde guardar el grafo (default: outputs/graph_index)",
     )
     parser.add_argument(
-        "--model", default="claude-haiku-4-5-20251001",
-        help="Modelo de Claude para extracción (default: claude-haiku-4-5-20251001)",
+        "--llm-provider",
+        default="claude",
+        help="Proveedor de LLM: 'claude' o 'ollama' (default: claude)",
+    )
+    parser.add_argument(
+        "--model",
+        dest="llm_model",
+        default="claude-haiku-4-5-20251001",
+        help="Modelo a usar (default: claude-haiku-4-5-20251001 para Claude, llama3 para Ollama)",
+    )
+    parser.add_argument(
+        "--ollama-host",
+        default="http://localhost:11434",
+        help="URL del servidor Ollama (default: http://localhost:11434)",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -123,13 +135,24 @@ def main():
         store.get_stats()
         return
 
+    # ── Crear proveedor de LLM ────────────────────────────────────────────────
+    from pipeline.llm import get_llm_provider
+    llm_provider = get_llm_provider(
+        provider=args.llm_provider,
+        model=args.llm_model,
+        host=args.ollama_host if args.llm_provider == "ollama" else None,
+        verbose=args.verbose
+    )
+
     # ── Extraer entidades y relaciones ─────────────────────────────────────
     extractor = GraphExtractor(
-        model=args.model,
+        model=args.llm_model,
+        llm_provider=llm_provider,
         verbose=args.verbose,
     )
 
-    print(f"\nModelo: {args.model}")
+    print(f"\nProveedor: {args.llm_provider}")
+    print(f"Modelo: {args.llm_model}")
     print(f"Grafo destino: {graph_dir}/\n")
 
     results = extractor.extract_from_chunks(

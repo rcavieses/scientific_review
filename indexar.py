@@ -173,12 +173,17 @@ def main() -> None:
 
     # Embedding
     parser.add_argument(
-        "--provider", default="local", choices=["local", "openai"],
-        help="Proveedor de embeddings (default: local)",
+        "--provider", default="local", choices=["local", "openai", "ollama"],
+        help="Proveedor de embeddings: local, openai, u ollama (default: local)",
     )
     parser.add_argument(
         "--model", default=None,
-        help="Modelo de embedding (default según proveedor)",
+        help="Modelo de embedding (default según proveedor: all-MiniLM-L6-v2 para local, text-embedding-3-small para openai, nomic-embed-text para ollama)",
+    )
+    parser.add_argument(
+        "--ollama-host",
+        default="http://localhost:11434",
+        help="URL del servidor Ollama (default: http://localhost:11434)",
     )
 
     # Chunking
@@ -233,6 +238,7 @@ def main() -> None:
     generator = get_embedding_generator(
         provider=args.provider,
         model=args.model,
+        host=args.ollama_host if args.provider == "ollama" else None,
         verbose=args.verbose,
     )
 
