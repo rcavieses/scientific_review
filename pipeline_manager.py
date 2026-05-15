@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
 import subprocess
@@ -15,6 +16,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -250,17 +255,56 @@ class PipelineManager:
         }
 
     def _step_search_articles(self) -> dict[str, Any]:
-        """Paso 3: Buscar artículos (stub - implementar con APIs reales)."""
+        """Paso 3: Buscar artículos en bases de datos científicas."""
+        from search_articles import search_articles_batch
+
+        acuaticas_csv = self.config.analysis_dir / "species_acuaticas.csv"
+
+        if not acuaticas_csv.exists():
+            raise FileNotFoundError(f"No encontrado: {acuaticas_csv}")
+
+        import csv
+
+        species_list = []
+        with acuaticas_csv.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                species = (row.get("species") or "").strip()
+                if species:
+                    species_list.append(species)
+
+        logger.info(f"Buscando artículos para {len(species_list)} especies...")
+
+        progress_file = self.config.project_root / "search_progress.json"
+        results = search_articles_batch(species_list, self.config.search_results_dir, progress_file)
+
         return {
-            "status": "pendiente_implementacion",
-            "message": "Este paso requiere integración con APIs científicas",
+            "status": "completado",
+            "total_especies": results["total"],
+            "con_articulos": results["found"],
+            "procesadas": results["processed"],
+            "promedio": f"{(results['found']/max(1, results['processed'])*100):.1f}%",
         }
 
     def _step_download_pdfs(self) -> dict[str, Any]:
-        """Paso 4: Descargar PDFs (stub)."""
+        """Paso 4: Descargar PDFs de artículos."""
+        from download_pdfs import download_all_articles
+
+        logger.info(f"Descargando PDFs desde {self.config.search_results_dir}...")
+
+        progress_file = self.config.project_root / "download_progress.json"
+        results = download_all_articles(
+            self.config.search_results_dir,
+            self.config.pdfs_dir,
+            progress_file,
+        )
+
         return {
-            "status": "pendiente_implementacion",
-            "message": "Este paso descargará PDFs basado en búsqueda de artículos",
+            "status": "completado",
+            "total_especies": results["total_species"],
+            "total_articulos": results["total_articles"],
+            "pdfs_descargados": results["total_downloaded"],
+            "tasa_descarga": f"{(results['total_downloaded']/max(1, results['total_articles'])*100):.1f}%",
         }
 
     def _step_index_rag(self) -> dict[str, Any]:

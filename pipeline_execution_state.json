@@ -1,0 +1,16 @@
+{
+  "start_time": "2026-05-15T04:16:05.323693",
+  "steps": {
+    "3": "completado",
+    "4": "pending",
+    "6": "pending"
+  },
+  "results": {
+    "3": {
+      "status": "completado",
+      "total": 3814,
+      "found": 2578,
+      "processed": 3814
+    }
+  }
+}
