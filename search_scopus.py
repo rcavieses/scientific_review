@@ -46,17 +46,35 @@ class ScopusSearcher:
 
     def __init__(self, api_key: str | None = None):
         """Inicializa el buscador."""
-        self.api_key = api_key or os.getenv("SCOPUS_API_KEY")
-        if not self.api_key:
+        # Intentar obtener API key en orden de prioridad
+        self.api_key = (
+            api_key
+            or os.getenv("SCOPUS_API_KEY")
+            or self._get_api_key_from_file()
+        )
+
+        if not self.api_key or not self.api_key.strip():
             raise ValueError(
                 "SCOPUS_API_KEY no configurada. "
                 "Edita .env o usa: export SCOPUS_API_KEY=tu_key"
             )
+
+        self.api_key = self.api_key.strip()
         self.session = requests.Session()
         self.session.headers.update({
             "X-ELS-APIKey": self.api_key,
             "Accept": "application/json",
         })
+
+    def _get_api_key_from_file(self) -> str | None:
+        """Intenta obtener API key del archivo secrets/scopus_apikey.txt"""
+        try:
+            secrets_file = Path("secrets/scopus_apikey.txt")
+            if secrets_file.exists():
+                return secrets_file.read_text().strip()
+        except Exception:
+            pass
+        return None
 
     def search(self, query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
         """Busca artículos en Scopus."""
@@ -72,13 +90,15 @@ class ScopusSearcher:
                     "start": start,
                     "count": page_size,
                     "sort": "citedby-count",
-                    "view": "COMPLETE",
                 }
 
                 logger.debug(f"  Página {start // page_size + 1}...")
                 response = self.session.get(SCOPUS_API, params=params, timeout=30)
 
+                logger.debug(f"  Response status: {response.status_code}")
+
                 if response.status_code == 401:
+                    logger.error(f"401 Unauthorized. Response: {response.text[:200]}")
                     raise ValueError("API key inválida o expirada")
                 if response.status_code == 429:
                     raise RuntimeError("Rate limit excedido. Intenta más tarde.")
