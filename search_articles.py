@@ -2,11 +2,17 @@
 PASO 3: Buscar artículos científicos para especies MARINE.
 
 Consulta múltiples bases de datos científicas:
-- PubMed (NCBI)
-- CrossRef (DOIs)
-- ArXiv (preprints)
+- PubMed (NCBI) - Gratuito
+- CrossRef (DOIs) - Gratuito
+- Scopus (si tiene API key) - Requiere subscripción
+- ScienceDirect (si tiene API key) - Requiere subscripción
+- ArXiv (preprints) - Gratuito
 
 Genera CSV por especie con: DOI, URL, título, año, journal
+
+Configuración:
+  - Copiar .env.example a .env
+  - Agregar SCOPUS_API_KEY y SCIENCEDIRECT_API_KEY si tienes acceso
 """
 
 from __future__ import annotations
@@ -19,6 +25,10 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +36,8 @@ logger = logging.getLogger(__name__)
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 CROSSREF_BASE = "https://api.crossref.org/works"
 ARXIV_BASE = "http://export.arxiv.org/api/query"
+SCIENCEDIRECT_BASE = "https://api.elsevier.com/content/search/sciencedirect"
+SCOPUS_BASE = "https://api.elsevier.com/content/search/scopus"
 
 # Configuración
 MAX_RESULTS = 20  # máximo de artículos por especie
@@ -144,6 +156,106 @@ def search_crossref(species_name: str) -> list[dict[str, Any]]:
     return results
 
 
+def search_sciencedirect(species_name: str) -> list[dict[str, Any]]:
+    """Busca en ScienceDirect (requiere API key en env var SCIENCEDIRECT_API_KEY)."""
+    import os
+
+    api_key = os.getenv("SCIENCEDIRECT_API_KEY", "")
+    if not api_key:
+        return []
+
+    results = []
+    try:
+        params = {
+            "query": species_name,
+            "count": MAX_RESULTS,
+            "sort": "date",
+            "apiKey": api_key,
+        }
+
+        time.sleep(SLEEP_CROSSREF)
+        resp = requests.get(SCIENCEDIRECT_BASE, params=params, timeout=TIMEOUT)
+
+        if resp.status_code != 200:
+            return results
+
+        data = resp.json()
+        items = data.get("search-results", {}).get("entry", [])
+
+        for item in items:
+            doi = item.get("prism:doi", "")
+            results.append(
+                {
+                    "source": "ScienceDirect",
+                    "doi": doi,
+                    "title": item.get("dc:title", ""),
+                    "authors": item.get("dc:creator", ""),
+                    "year": item.get("prism:coverDate", "")[:4],
+                    "journal": item.get("prism:publicationName", ""),
+                    "url": item.get("link", [{"@href": ""}])[0].get("@href", "") if item.get("link") else "",
+                }
+            )
+
+    except Exception as e:
+        logger.debug(f"Error en ScienceDirect para {species_name}: {e}")
+
+    return results
+
+
+def search_scopus(species_name: str) -> list[dict[str, Any]]:
+    """Busca en Scopus (requiere API key en env var SCOPUS_API_KEY)."""
+    import os
+
+    api_key = os.getenv("SCOPUS_API_KEY", "")
+    if not api_key:
+        return []
+
+    results = []
+    try:
+        headers = {
+            "X-ELS-APIKey": api_key,
+            "Accept": "application/json",
+        }
+
+        params = {
+            "query": f'TITLE-ABS-KEY("{species_name}")',
+            "count": MAX_RESULTS,
+            "sort": "date",
+        }
+
+        time.sleep(SLEEP_CROSSREF)
+        resp = requests.get(SCOPUS_BASE, params=params, headers=headers, timeout=TIMEOUT)
+
+        if resp.status_code != 200:
+            return results
+
+        data = resp.json()
+        items = data.get("search-results", {}).get("entry", [])
+
+        for item in items:
+            eid = item.get("eid", "")
+            doi = item.get("prism:doi", "")
+            results.append(
+                {
+                    "source": "Scopus",
+                    "doi": doi,
+                    "title": item.get("dc:title", ""),
+                    "authors": ", ".join(
+                        [a.get("authname", "") for a in item.get("author", [])][:3]
+                    ),
+                    "year": item.get("prism:coverDate", "")[:4],
+                    "journal": item.get("prism:publicationName", ""),
+                    "url": f"https://www.scopus.com/inward/record.uri?eid={eid}" if eid else "",
+                    "scopus_id": eid,
+                }
+            )
+
+    except Exception as e:
+        logger.debug(f"Error en Scopus para {species_name}: {e}")
+
+    return results
+
+
 def search_arxiv(species_name: str) -> list[dict[str, Any]]:
     """Busca artículos en ArXiv por nombre de especie."""
     results = []
@@ -205,9 +317,11 @@ def search_articles_for_species(species_name: str) -> list[dict[str, Any]]:
 
     all_results = []
 
-    # Buscar en cada base de datos
+    # Buscar en cada base de datos (en orden de relevancia)
     all_results.extend(search_pubmed(species_name))
     all_results.extend(search_crossref(species_name))
+    all_results.extend(search_scopus(species_name))  # Si está configurado
+    all_results.extend(search_sciencedirect(species_name))  # Si está configurado
     all_results.extend(search_arxiv(species_name))
 
     # Remover duplicados por título
