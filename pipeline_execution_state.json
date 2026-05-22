@@ -2,8 +2,8 @@
   "start_time": "2026-05-15T04:16:05.323693",
   "steps": {
     "3": "completado",
-    "4": "pending",
-    "6": "pending"
+    "4": "completado",
+    "6": "completado"
   },
   "results": {
     "3": {
@@ -11,6 +11,22 @@
       "total": 3814,
       "found": 2578,
       "processed": 3814
+    },
+    "4": {
+      "status": "completado",
+      "total_species": 3785,
+      "total_articles": 68525,
+      "total_downloaded": 31925
+    },
+    "6": {
+      "status": "completado",
+      "report_path": "/home/atlantis/scientific_review/REPORTE_PASOS_3_4.md",
+      "total_species": 3814,
+      "species_con_articulos": 3730,
+      "species_sin_articulos": 60,
+      "total_articulos": 64722,
+      "total_pdfs": 32576
     }
-  }
+  },
+  "end_time": "2026-05-17T13:42:54.658959"
 }

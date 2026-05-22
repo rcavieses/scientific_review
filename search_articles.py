@@ -28,7 +28,9 @@ import requests
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
-load_dotenv()
+_project_root = Path(__file__).parent
+_env_file = _project_root / ".env"
+load_dotenv(_env_file)
 
 logger = logging.getLogger(__name__)
 
