@@ -84,7 +84,7 @@ class RAGPipelineOrchestrator:
             {processed, skipped, failed, total_chunks, index_stats}
         """
         if pdf_paths is None:
-            pdf_paths = sorted(self.pdf_dir.glob("*.pdf"))
+            pdf_paths = sorted(self.pdf_dir.rglob("*.pdf"))
 
         if not pdf_paths:
             print(f"No se encontraron PDFs en {self.pdf_dir}")

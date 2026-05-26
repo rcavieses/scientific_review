@@ -235,12 +235,17 @@ def main() -> None:
 
     # Inicializar componentes
     from pipeline.embeddings.embedding_generator import get_embedding_generator
-    generator = get_embedding_generator(
-        provider=args.provider,
-        model=args.model,
-        host=args.ollama_host if args.provider == "ollama" else None,
-        verbose=args.verbose,
-    )
+
+    # Construir kwargs dinámicamente según el provider
+    gen_kwargs = {
+        "provider": args.provider,
+        "model": args.model,
+        "verbose": args.verbose,
+    }
+    if args.provider == "ollama":
+        gen_kwargs["host"] = args.ollama_host
+
+    generator = get_embedding_generator(**gen_kwargs)
 
     extractor = PdfPlumberExtractor(verbose=args.verbose)
     chunker = TextChunker(

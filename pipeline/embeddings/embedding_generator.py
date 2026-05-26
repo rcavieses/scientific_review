@@ -460,8 +460,9 @@ class OllamaEmbeddingGenerator(EmbeddingGenerator):
 
         if verbose:
             try:
-                models = self._client.list()
-                available_models = [m["name"] for m in models.get("models", [])]
+                models_response = self._client.list()
+                models_list = models_response.get("models", []) if isinstance(models_response, dict) else models_response
+                available_models = [m.get("name", m) if isinstance(m, dict) else m for m in models_list]
                 if model_name in available_models:
                     print(f"[OllamaEmbeddingGenerator] Modelo '{model_name}' disponible")
                 else:
@@ -555,15 +556,18 @@ def get_embedding_generator(
 
     if provider_lower == "local":
         model = model or "all-MiniLM-L6-v2"
-        return LocalEmbeddingGenerator(model, verbose=verbose, **kwargs)
+        local_kwargs = {k: v for k, v in kwargs.items() if k in ["device", "cache_folder", "normalize_embeddings"]}
+        return LocalEmbeddingGenerator(model, verbose=verbose, **local_kwargs)
 
     elif provider_lower == "openai":
         model = model or "text-embedding-3-small"
-        return OpenAIEmbeddingGenerator(model, verbose=verbose, **kwargs)
+        openai_kwargs = {k: v for k, v in kwargs.items() if k in ["api_key"]}
+        return OpenAIEmbeddingGenerator(model, verbose=verbose, **openai_kwargs)
 
     elif provider_lower == "ollama":
         model = model or "nomic-embed-text"
-        return OllamaEmbeddingGenerator(model_name=model, verbose=verbose, **kwargs)
+        ollama_kwargs = {k: v for k, v in kwargs.items() if k in ["host"]}
+        return OllamaEmbeddingGenerator(model_name=model, verbose=verbose, **ollama_kwargs)
 
     else:
         raise ValueError(
