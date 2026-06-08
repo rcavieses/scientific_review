@@ -104,3 +104,24 @@ openai_key*
 __pycache__
 CLAUDE.md
 search_logs/
+
+# ── Colecciones de PDFs (locales, iteraciones previas) ────────────────────
+/PDF/
+/PDF_GOC/
+
+# ── Directorios grandes de resultados de búsqueda (ahora en outputs/, ya gitignored) ─
+# outputs/search_results/          ← cubierto por /outputs/
+# outputs/search_results_canonical/ ← cubierto por /outputs/
+# outputs/scopus_results/           ← cubierto por /outputs/
+# outputs/sciencedirect_results/    ← cubierto por /outputs/
+
+# ── Estado y progreso del pipeline (en outputs/state/) ───────────────────
+outputs/state/
+
+# ── Archivos de estado sueltos que puedan quedar en raíz ──────────────────
+*.pid
+paywall_articles.json
+species_with_pdfs.json
+species_with_pdfs.txt
+species_in_index.txt
+pdfs_indexed.txt

@@ -57,7 +57,8 @@
       "Bash(python descargar_indexar_completo.py)",
       "Bash(python -c \"import json; cfg=json.load\\(open\\('outputs/rag_index/index_config.json'\\)\\); print\\(f' Chunks: {cfg.get\\(\\\\\"total_chunks\\\\\", \\\\\"N/A\\\\\"\\)}'\\)\")",
       "Bash(python consultar_parametros_rag.py --skip-download --skip-index --top-k 5)",
-      "Bash(tee salida_rag_expandida.log)"
+      "Bash(tee salida_rag_expandida.log)",
+      "Bash(python3)"
     ]
   }
 }

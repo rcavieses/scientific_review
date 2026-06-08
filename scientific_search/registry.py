@@ -27,8 +27,8 @@ class SearchRegistry:
         self.base_directory.mkdir(parents=True, exist_ok=True)
 
         # Crear subdirectorios
-        self.results_dir = self.base_directory / "search_results"
-        self.logs_dir = self.base_directory / "search_logs"
+        self.results_dir = self.base_directory / "outputs" / "search_results"
+        self.logs_dir = self.base_directory / "outputs" / "search_logs"
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 

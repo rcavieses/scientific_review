@@ -1,0 +1,8 @@
+{
+  "api_key": "TU_API_KEY_AQUI",
+  "output_dir": "downloaded_pdfs",
+  "sleep_between_requests": 1.0,
+  "timeout": 30,
+  "max_retries": 3,
+  "retry_delay": 5
+}

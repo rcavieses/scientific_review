@@ -833,11 +833,141 @@ class LocalPdfAdapter(BaseAdapter):
         return False
 
 
+class BioRxivAdapter(BaseAdapter):
+    """Adaptador para bioRxiv/medRxiv (preprints)."""
+
+    BASE_URL = "https://api.biorxiv.org/details"
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+    ) -> List[Article]:
+        """Busca preprints en bioRxiv/medRxiv."""
+        articles = []
+
+        try:
+            import datetime
+
+            # Búsqueda en últimos 365 días
+            today = datetime.date.today()
+            start_date = today - datetime.timedelta(days=365)
+
+            search_url = (
+                f"{self.BASE_URL}/biorxiv/{start_date.isoformat()}/{today.isoformat()}"
+            )
+
+            params = {"sort": "date", "direction": "descending"}
+
+            response = requests.get(search_url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+
+            data = response.json()
+            query_lower = query.lower()
+
+            for preprint in data.get("collection", [])[:max_results * 2]:
+                title = preprint.get("title", "").lower()
+                abstract = preprint.get("abstract", "").lower()
+
+                if query_lower not in title and query_lower not in abstract:
+                    continue
+
+                doi = preprint.get("doi", "")
+                date_str = preprint.get("date", "")
+                year = int(date_str[:4]) if date_str else None
+
+                authors = preprint.get("authors", "")
+                if isinstance(authors, list):
+                    author_list = authors[:3]
+                else:
+                    author_list = [a.strip() for a in str(authors).split(",")[:3]]
+
+                article = Article(
+                    title=preprint.get("title", ""),
+                    authors=author_list,
+                    year=year,
+                    doi=doi,
+                    url=f"https://doi.org/{doi}" if doi else "",
+                    abstract=preprint.get("abstract"),
+                    journal="bioRxiv/medRxiv",
+                    source="biorxiv",
+                    full_data={"date": date_str},
+                )
+                articles.append(article)
+
+                if len(articles) >= max_results:
+                    break
+
+        except Exception as e:
+            print(f"Error en bioRxiv: {str(e)}")
+
+        return articles[:max_results]
+
+
+class PlosAdapter(BaseAdapter):
+    """Adaptador para PLOS ONE (acceso abierto)."""
+
+    BASE_URL = "https://api.plos.org/search"
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+    ) -> List[Article]:
+        """Busca artículos en PLOS ONE."""
+        articles = []
+
+        try:
+            params = {
+                "q": f'"{query}"',
+                "wt": "json",
+                "rows": max_results,
+                "sort": "publication_date desc",
+            }
+
+            response = requests.get(self.BASE_URL, params=params, timeout=self.timeout)
+            response.raise_for_status()
+
+            data = response.json()
+            docs = data.get("response", {}).get("docs", [])
+
+            for doc in docs:
+                doi = doc.get("id", "")
+                publication_date = doc.get("publication_date", "")
+                year = int(publication_date[:4]) if publication_date else None
+
+                authors_list = doc.get("author_display", [])
+                authors = authors_list[:3] if authors_list else []
+
+                article = Article(
+                    title=doc.get("title_display", ""),
+                    authors=authors,
+                    year=year,
+                    doi=doi,
+                    url=f"https://doi.org/{doi}" if doi else "",
+                    journal=doc.get("journal_name", "PLOS ONE"),
+                    source="plos",
+                    full_data={"publication_date": publication_date},
+                )
+                articles.append(article)
+
+        except Exception as e:
+            print(f"Error en PLOS: {str(e)}")
+
+        return articles[:max_results]
+
+
 # Registro de adaptadores disponibles
 AVAILABLE_ADAPTERS = {
     "crossref": CrossrefAdapter,
     "pubmed": PubMedAdapter,
     "arxiv": ArxivAdapter,
     "scopus": ScopusAdapter,
+    "biorxiv": BioRxivAdapter,
+    "plos": PlosAdapter,
     "local_pdf": LocalPdfAdapter,
 }
