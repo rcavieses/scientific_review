@@ -68,15 +68,30 @@ def _load_api_key(env_var: str, secret_file: str) -> str:
 	return key
 
 
-def search_pubmed(species_name: str) -> list[dict[str, Any]]:
-    """Busca artículos en PubMed por nombre de especie."""
+def search_pubmed(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca artículos en PubMed por nombre de especie.
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados
+    """
     results = []
     try:
         # Búsqueda en PubMed
         search_url = f"{PUBMED_BASE}/esearch.fcgi"
+
+        # Construir query con filtro geográfico opcional
+        query = f'"{species_name}"[Organism]'
+        if region_terms:
+            region_query = " OR ".join([f'"{term}"[Title/Abstract]' for term in region_terms])
+            query = f'{query} AND ({region_query})'
+
         search_params = {
             "db": "pubmed",
-            "term": f'"{species_name}"[Organism]',
+            "term": query,
             "retmax": MAX_RESULTS,
             "rettype": "json",
         }
@@ -132,16 +147,29 @@ def search_pubmed(species_name: str) -> list[dict[str, Any]]:
     return results
 
 
-def search_crossref(species_name: str) -> list[dict[str, Any]]:
-    """Busca artículos en CrossRef por nombre de especie."""
+def search_crossref(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca artículos en CrossRef por nombre de especie.
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados
+    """
     results = []
     try:
         # query.bibliographic restringe la búsqueda al título, abstract y palabras clave.
         # Las comillas obligan a Crossref a tratar el nombre como frase exacta,
         # evitando que devuelva artículos donde la palabra aparece en apellidos de autores
         # o en contextos no relacionados (ej. "Pinus nigra", "Alberto Nigra").
+        query = f'"{species_name}"'
+        if region_terms:
+            region_query = " OR ".join(f'"{term}"' for term in region_terms)
+            query = f'{query} AND ({region_query})'
+
         params = {
-            "query.bibliographic": f'"{species_name}"',
+            "query.bibliographic": query,
             "rows": MAX_RESULTS,
             "sort": "published",
             "order": "desc",
@@ -181,12 +209,13 @@ def search_crossref(species_name: str) -> list[dict[str, Any]]:
     return results
 
 
-def search_sciencedirect(species_name: str, api_key: str = "") -> list[dict[str, Any]]:
+def search_sciencedirect(species_name: str, api_key: str = "", region_terms: list[str] | None = None) -> list[dict[str, Any]]:
     """Busca en ScienceDirect (requiere API key en env var SCIENCEDIRECT_API_KEY o secrets/sciencedirect_apikey.txt).
 
     Args:
         species_name: nombre de la especie a buscar
         api_key: API key opcional. Si no se proporciona, se carga desde env/secrets
+        region_terms: términos geográficos opcionales para filtrar resultados
 
     Returns:
         Lista de artículos encontrados
@@ -198,8 +227,13 @@ def search_sciencedirect(species_name: str, api_key: str = "") -> list[dict[str,
 
     results = []
     try:
+        query = species_name
+        if region_terms:
+            region_query = " OR ".join(region_terms)
+            query = f'{query} AND ({region_query})'
+
         params = {
-            "query": species_name,
+            "query": query,
             "count": MAX_RESULTS,
             "sort": "date",
             "apiKey": api_key,
@@ -238,12 +272,13 @@ def search_sciencedirect(species_name: str, api_key: str = "") -> list[dict[str,
     return results
 
 
-def search_scopus(species_name: str, api_key: str = "") -> list[dict[str, Any]]:
+def search_scopus(species_name: str, api_key: str = "", region_terms: list[str] | None = None) -> list[dict[str, Any]]:
     """Busca en Scopus (requiere API key en env var SCOPUS_API_KEY o secrets/scopus_apikey.txt).
 
     Args:
         species_name: nombre de la especie a buscar
         api_key: API key opcional. Si no se proporciona, se carga desde env/secrets
+        region_terms: términos geográficos opcionales para filtrar resultados
 
     Returns:
         Lista de artículos encontrados
@@ -260,8 +295,13 @@ def search_scopus(species_name: str, api_key: str = "") -> list[dict[str, Any]]:
             "Accept": "application/json",
         }
 
+        query = f'TITLE-ABS-KEY("{species_name}")'
+        if region_terms:
+            region_query = ' AND '.join([f'TITLE-ABS-KEY("{term}")' for term in region_terms])
+            query = f'{query} AND {region_query}'
+
         params = {
-            "query": f'TITLE-ABS-KEY("{species_name}")',
+            "query": query,
             "count": MAX_RESULTS,
             "sort": "date",
         }
@@ -299,8 +339,16 @@ def search_scopus(species_name: str, api_key: str = "") -> list[dict[str, Any]]:
     return results
 
 
-def search_arxiv(species_name: str) -> list[dict[str, Any]]:
-    """Busca artículos en ArXiv por nombre de especie."""
+def search_arxiv(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca artículos en ArXiv por nombre de especie.
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados
+    """
     results = []
     try:
         # ti: restringe la búsqueda al título del paper.
@@ -309,8 +357,13 @@ def search_arxiv(species_name: str) -> list[dict[str, Any]]:
         # Nota: arXiv tiene poca cobertura de biología/ecología marina;
         # se mantiene la búsqueda pero los resultados serán pocos.
         escaped = species_name.replace('"', '')
+        search_query = f'ti:"{escaped}"'
+        if region_terms:
+            region_query = ' OR '.join([f'ti:"{term}"' for term in region_terms])
+            search_query = f'{search_query} AND ({region_query})'
+
         params = {
-            "search_query": f'ti:"{escaped}"',
+            "search_query": search_query,
             "max_results": MAX_RESULTS,
             "sort_by": "submittedDate",
             "sort_order": "descending",
@@ -374,18 +427,26 @@ def _title_contains_species(title: str, species_name: str) -> bool:
     return parts[0] in title_lower if parts else False
 
 
-def search_articles_for_species(species_name: str) -> list[dict[str, Any]]:
-    """Busca artículos en todas las bases de datos para una especie."""
+def search_articles_for_species(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca artículos en todas las bases de datos para una especie.
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados de todas las fuentes
+    """
     logger.debug(f"Buscando artículos para: {species_name}")
 
     all_results = []
 
     # Buscar en cada base de datos (en orden de relevancia)
-    all_results.extend(search_pubmed(species_name))
-    all_results.extend(search_crossref(species_name))
-    all_results.extend(search_scopus(species_name))  # Si está configurado
-    all_results.extend(search_sciencedirect(species_name))  # Si está configurado
-    all_results.extend(search_arxiv(species_name))
+    all_results.extend(search_pubmed(species_name, region_terms=region_terms))
+    all_results.extend(search_crossref(species_name, region_terms=region_terms))
+    all_results.extend(search_scopus(species_name, region_terms=region_terms))  # Si está configurado
+    all_results.extend(search_sciencedirect(species_name, region_terms=region_terms))  # Si está configurado
+    all_results.extend(search_arxiv(species_name, region_terms=region_terms))
 
     # Filtro de relevancia: el título debe mencionar el nombre de la especie.
     # PubMed y Scopus ya son semánticamente precisos; CrossRef y ArXiv no.
@@ -456,8 +517,19 @@ def search_articles_batch(
     species_list: list[str],
     output_dir: Path,
     progress_file: Path | None = None,
+    region_terms: list[str] | None = None,
 ) -> dict[str, int]:
-    """Busca artículos para un lote de especies."""
+    """Busca artículos para un lote de especies.
+
+    Args:
+        species_list: lista de nombres de especies a buscar
+        output_dir: directorio para guardar resultados CSV
+        progress_file: archivo para guardar/cargar progreso (JSON)
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Resumen de búsqueda con total, encontrados y procesados
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Cargar progreso previo
@@ -481,7 +553,7 @@ def search_articles_batch(
 
         logger.info(f"[{idx}/{len(species_list)}] Buscando: {species_name}")
 
-        articles = search_articles_for_species(species_name)
+        articles = search_articles_for_species(species_name, region_terms=region_terms)
         if articles:
             save_species_articles(species_name, articles, output_dir)
             results_summary["found"] += 1
