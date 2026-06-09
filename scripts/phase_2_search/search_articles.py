@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,24 @@ TIMEOUT = 15
 SLEEP_PUBMED = 0.3  # segundos entre peticiones PubMed
 SLEEP_CROSSREF = 0.1
 SLEEP_ARXIV = 0.1
+
+
+def _load_api_key(env_var: str, secret_file: str) -> str:
+	"""Carga API key desde variable de entorno o archivo secrets/.
+
+	Args:
+	    env_var: nombre de la variable de entorno (ej. SCOPUS_API_KEY)
+	    secret_file: nombre del archivo en secrets/ (ej. scopus_apikey.txt)
+
+	Returns:
+	    API key si existe, string vacío si no se encuentra
+	"""
+	key = os.getenv(env_var, "").strip()
+	if not key:
+		secret_path = Path(__file__).resolve().parents[2] / "secrets" / secret_file
+		if secret_path.exists():
+			key = secret_path.read_text().strip()
+	return key
 
 
 def search_pubmed(species_name: str) -> list[dict[str, Any]]:
@@ -162,11 +181,18 @@ def search_crossref(species_name: str) -> list[dict[str, Any]]:
     return results
 
 
-def search_sciencedirect(species_name: str) -> list[dict[str, Any]]:
-    """Busca en ScienceDirect (requiere API key en env var SCIENCEDIRECT_API_KEY)."""
-    import os
+def search_sciencedirect(species_name: str, api_key: str = "") -> list[dict[str, Any]]:
+    """Busca en ScienceDirect (requiere API key en env var SCIENCEDIRECT_API_KEY o secrets/sciencedirect_apikey.txt).
 
-    api_key = os.getenv("SCIENCEDIRECT_API_KEY", "")
+    Args:
+        species_name: nombre de la especie a buscar
+        api_key: API key opcional. Si no se proporciona, se carga desde env/secrets
+
+    Returns:
+        Lista de artículos encontrados
+    """
+    if not api_key:
+        api_key = _load_api_key("SCIENCEDIRECT_API_KEY", "sciencedirect_apikey.txt")
     if not api_key:
         return []
 
@@ -212,11 +238,18 @@ def search_sciencedirect(species_name: str) -> list[dict[str, Any]]:
     return results
 
 
-def search_scopus(species_name: str) -> list[dict[str, Any]]:
-    """Busca en Scopus (requiere API key en env var SCOPUS_API_KEY)."""
-    import os
+def search_scopus(species_name: str, api_key: str = "") -> list[dict[str, Any]]:
+    """Busca en Scopus (requiere API key en env var SCOPUS_API_KEY o secrets/scopus_apikey.txt).
 
-    api_key = os.getenv("SCOPUS_API_KEY", "")
+    Args:
+        species_name: nombre de la especie a buscar
+        api_key: API key opcional. Si no se proporciona, se carga desde env/secrets
+
+    Returns:
+        Lista de artículos encontrados
+    """
+    if not api_key:
+        api_key = _load_api_key("SCOPUS_API_KEY", "scopus_apikey.txt")
     if not api_key:
         return []
 
