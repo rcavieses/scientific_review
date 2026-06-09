@@ -17,11 +17,12 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+from scripts.phase_2_search.search_articles import search_scopus, _load_api_key
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -54,17 +55,6 @@ TIMEOUT = 15
 SLEEP_BETWEEN = 0.15  # respeta rate-limit de Elsevier (6 req/s máx.)
 
 
-# ── Scopus API key ────────────────────────────────────────────────────────────
-
-def get_scopus_apikey() -> str:
-    """Lee API key desde env var o secrets/scopus_apikey.txt."""
-    key = os.getenv("SCOPUS_API_KEY", "").strip()
-    if key:
-        return key
-    key_file = PROJECT_ROOT / "secrets" / "scopus_apikey.txt"
-    if key_file.exists():
-        return key_file.read_text(encoding="utf-8").strip()
-    return ""
 
 
 # ── State management ──────────────────────────────────────────────────────────
@@ -133,54 +123,6 @@ def load_all_species() -> list[str]:
 
 # ── Scopus search ─────────────────────────────────────────────────────────────
 
-def search_scopus(species_name: str, api_key: str) -> list[dict]:
-    """Busca una especie en Scopus. Retorna lista de artículos."""
-    import requests
-
-    results: list[dict] = []
-    try:
-        headers = {
-            "X-ELS-APIKey": api_key,
-            "Accept": "application/json",
-        }
-        params = {
-            "query": f'TITLE-ABS-KEY("{species_name}")',
-            "count": MAX_RESULTS,
-            "sort": "date",
-        }
-
-        time.sleep(SLEEP_BETWEEN)
-        resp = requests.get(SCOPUS_BASE, params=params, headers=headers, timeout=TIMEOUT)
-
-        if resp.status_code == 429:
-            logger.warning("Rate limit hit (429). Sleeping 60s...")
-            time.sleep(60)
-            resp = requests.get(SCOPUS_BASE, params=params, headers=headers, timeout=TIMEOUT)
-
-        if resp.status_code != 200:
-            logger.debug(f"Scopus HTTP {resp.status_code} for '{species_name}'")
-            return results
-
-        items = resp.json().get("search-results", {}).get("entry", [])
-        for item in items:
-            eid = item.get("eid", "")
-            results.append({
-                "source": "Scopus",
-                "doi": item.get("prism:doi", ""),
-                "title": item.get("dc:title", ""),
-                "authors": ", ".join(
-                    [a.get("authname", "") for a in item.get("author", [])][:3]
-                ),
-                "year": item.get("prism:coverDate", "")[:4],
-                "journal": item.get("prism:publicationName", ""),
-                "url": f"https://www.scopus.com/inward/record.uri?eid={eid}" if eid else "",
-                "pubmed_id": "",
-                "arxiv_id": "",
-            })
-    except Exception as e:
-        logger.debug(f"Scopus error for '{species_name}': {e}")
-
-    return results
 
 
 def save_articles(species_name: str, articles: list[dict], output_dir: Path) -> None:
@@ -225,10 +167,9 @@ def main() -> None:
     logger.info("=" * 70)
     logger.info("SCOPUS PARALLEL SEARCH — START")
     logger.info(f"Time: {datetime.now().isoformat()}")
-    logger.info(f"PID:  {os.getpid()}")
     logger.info("=" * 70)
 
-    api_key = get_scopus_apikey()
+    api_key = _load_api_key("SCOPUS_API_KEY", "scopus_apikey.txt")
     if not api_key:
         logger.error("No Scopus API key found. Set SCOPUS_API_KEY env var or secrets/scopus_apikey.txt")
         sys.exit(1)
