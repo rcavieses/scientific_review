@@ -17,6 +17,8 @@ from typing import Any
 
 import requests
 
+from scripts.phase_3_download.download_pdfs import download_from_url
+
 logger = logging.getLogger(__name__)
 
 # Configuración
@@ -37,33 +39,6 @@ def ensure_directories():
     logger.info(f"✓ Directorio de salida: {PDF_DIR}")
 
 
-def try_direct_download(url: str, output_path: Path) -> bool:
-    """Intenta descargar directamente desde la URL."""
-    if not url or not url.startswith("http"):
-        return False
-
-    try:
-        logger.debug(f"Intentando descarga directa: {url[:60]}...")
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
-
-        if resp.status_code == 200:
-            # Verificar que sea un PDF
-            if "application/pdf" in resp.headers.get("content-type", ""):
-                with output_path.open("wb") as f:
-                    f.write(resp.content)
-                logger.debug(f"  ✓ Descargado: {output_path.name}")
-                return True
-        elif resp.status_code == 403 or resp.status_code == 401:
-            logger.debug(f"  ⚠ Acceso denegado ({resp.status_code})")
-            return False
-        else:
-            logger.debug(f"  ✗ Error HTTP {resp.status_code}")
-            return False
-    except Exception as e:
-        logger.debug(f"  ✗ Error en descarga directa: {str(e)[:50]}")
-        return False
-
-    return False
 
 
 def try_doi2pdf(doi: str, output_path: Path) -> bool:
@@ -183,7 +158,7 @@ def download_article_pdf(
 
     # Intentar diferentes métodos
     methods = [
-        ("URL directa", lambda: try_direct_download(url, output_path)),
+        ("URL directa", lambda: download_from_url(url, output_path)),
         ("doi2pdf", lambda: try_doi2pdf(doi, output_path)),
         ("PubMed", lambda: try_pubmed_download(pubmed_id, output_path)),
     ]
