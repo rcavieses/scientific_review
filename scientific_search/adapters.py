@@ -715,6 +715,95 @@ class ScienceDirectAdapter(BaseAdapter):
         )
 
 
+class FrontiersAdapter(BaseAdapter):
+    """Adaptador para Frontiers in Science (open access multidisciplinar)."""
+
+    BASE_URL = "https://www.frontiersin.org/api/v1/articles"
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+    ) -> List[Article]:
+        """Busca artículos en Frontiers."""
+        articles = []
+
+        try:
+            params = {
+                "search": query,
+                "per_page": min(max_results, 250),
+                "page": 1,
+                "sort_by": "date",
+            }
+
+            if year_start:
+                params["year_start"] = year_start
+            if year_end:
+                params["year_end"] = year_end
+
+            time.sleep(0.5)
+            response = requests.get(self.BASE_URL, params=params, timeout=self.timeout)
+            response.raise_for_status()
+
+            data = response.json()
+            items = data.get("articles", [])
+
+            for item in items:
+                article = self._parse_item(item)
+                if article:
+                    articles.append(article)
+
+            return articles[:max_results]
+
+        except Exception as e:
+            print(f"Error en Frontiers: {str(e)}")
+            return []
+
+    def _parse_item(self, item: Dict[str, Any]) -> Optional[Article]:
+        """Parsea un artículo de Frontiers."""
+        title = item.get("title", "").strip()
+        if not title:
+            return None
+
+        # Año
+        year = None
+        published_on = item.get("published_on", "")
+        if published_on:
+            try:
+                year = int(published_on[:4])
+            except (ValueError, TypeError):
+                pass
+
+        # Autores
+        authors = []
+        authors_data = item.get("authors", [])
+        if isinstance(authors_data, list):
+            for author in authors_data[:5]:
+                if isinstance(author, dict):
+                    name = author.get("name", "").strip()
+                    if name:
+                        authors.append(name)
+                elif isinstance(author, str):
+                    authors.append(author)
+
+        doi = item.get("doi", "").strip()
+        url = item.get("url", "") or (f"https://doi.org/{doi}" if doi else "")
+
+        return Article(
+            title=title,
+            authors=authors,
+            year=year,
+            doi=doi,
+            url=url,
+            journal=item.get("journal_name", "Frontiers"),
+            abstract=item.get("abstract", "").strip() or None,
+            source="frontiers",
+            full_data={},
+        )
+
+
 class LocalPdfAdapter(BaseAdapter):
     """Adaptador que lee metadatos de PDFs en una carpeta local."""
 
@@ -1092,6 +1181,7 @@ AVAILABLE_ADAPTERS = {
     "arxiv": ArxivAdapter,
     "scopus": ScopusAdapter,
     "sciencedirect": ScienceDirectAdapter,
+    "frontiers": FrontiersAdapter,
     "biorxiv": BioRxivAdapter,
     "plos": PlosAdapter,
     "local_pdf": LocalPdfAdapter,
