@@ -591,6 +591,130 @@ class ScopusAdapter(BaseAdapter):
         )
 
 
+class ScienceDirectAdapter(BaseAdapter):
+    """Adaptador para la API de ScienceDirect (Elsevier)."""
+
+    BASE_URL = "https://api.elsevier.com/content/search/sciencedirect"
+
+    def __init__(self, apikey: Optional[str] = None, timeout: int = 10, retry_delay: float = 1.0):
+        """
+        Inicializa el adaptador de ScienceDirect.
+
+        Args:
+            apikey: API key de Elsevier. Si no se provee, busca en secrets/.
+            timeout: Tiempo máximo de espera para requests (segundos).
+            retry_delay: Retraso entre reintentos (segundos).
+        """
+        super().__init__(timeout=timeout, retry_delay=retry_delay)
+        self.apikey = apikey or self._load_apikey()
+
+    def _load_apikey(self) -> Optional[str]:
+        """Carga la API key desde los archivos de secretos."""
+        for path in _ELSEVIER_APIKEY_PATHS:
+            if path.exists():
+                key = path.read_text(encoding="utf-8").strip()
+                if key:
+                    return key
+        return None
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+    ) -> List[Article]:
+        """Busca artículos en ScienceDirect."""
+        if not self.apikey:
+            print(
+                "ScienceDirect: API key no encontrada. "
+                "Crea el archivo 'secrets/sciencedirect_apikey.txt' o usa --apikey."
+            )
+            return []
+
+        try:
+            sciencedirect_query = query
+            if year_start and year_end:
+                sciencedirect_query += f" AND {year_start}:{year_end}"
+            elif year_start:
+                sciencedirect_query += f" AND {year_start}:"
+            elif year_end:
+                sciencedirect_query += f" AND :{year_end}"
+
+            params = {
+                "query": sciencedirect_query,
+                "count": min(max_results, 100),
+                "sort": "date",
+                "apiKey": self.apikey,
+            }
+
+            time.sleep(0.5)
+            response = requests.get(self.BASE_URL, params=params, timeout=self.timeout)
+
+            if response.status_code == 401:
+                print("ScienceDirect: API key inválida o sin permisos. Verifica en https://dev.elsevier.com")
+                return []
+
+            response.raise_for_status()
+
+            data = response.json().get("search-results", {})
+            entries = data.get("entry", [])
+            articles = []
+
+            for entry in entries:
+                article = self._parse_entry(entry)
+                if article:
+                    articles.append(article)
+
+            return articles[:max_results]
+
+        except Exception as e:
+            print(f"Error en ScienceDirect: {str(e)}")
+            return []
+
+    def _parse_entry(self, entry: Dict[str, Any]) -> Optional[Article]:
+        """Parsea un resultado de ScienceDirect."""
+        title = entry.get("dc:title", "").strip()
+        if not title or title.lower() == "no results found":
+            return None
+
+        # Año
+        year = None
+        cover = entry.get("prism:coverDate", "")
+        if cover:
+            try:
+                year = int(cover[:4])
+            except ValueError:
+                pass
+
+        # Autores
+        authors = []
+        creator = entry.get("dc:creator", "")
+        if isinstance(creator, str) and creator:
+            authors = [creator]
+        elif isinstance(creator, list):
+            authors = creator
+
+        doi = entry.get("prism:doi", "")
+        url = ""
+        links = entry.get("link", [])
+        if isinstance(links, list) and links:
+            url = links[0].get("@href", "") if isinstance(links[0], dict) else ""
+        if not url and doi:
+            url = f"https://doi.org/{doi}"
+
+        return Article(
+            title=title,
+            authors=authors,
+            year=year,
+            doi=doi,
+            url=url,
+            journal=entry.get("prism:publicationName", ""),
+            source="sciencedirect",
+            full_data={},
+        )
+
+
 class LocalPdfAdapter(BaseAdapter):
     """Adaptador que lee metadatos de PDFs en una carpeta local."""
 
@@ -967,6 +1091,7 @@ AVAILABLE_ADAPTERS = {
     "pubmed": PubMedAdapter,
     "arxiv": ArxivAdapter,
     "scopus": ScopusAdapter,
+    "sciencedirect": ScienceDirectAdapter,
     "biorxiv": BioRxivAdapter,
     "plos": PlosAdapter,
     "local_pdf": LocalPdfAdapter,
