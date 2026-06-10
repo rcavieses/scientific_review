@@ -804,6 +804,109 @@ class FrontiersAdapter(BaseAdapter):
         )
 
 
+class eLifeAdapter(BaseAdapter):
+    """Adaptador para eLife (open access, revisado por pares)."""
+
+    BASE_URL = "https://api.elifesciences.org/v2/search"
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+    ) -> List[Article]:
+        """Busca artículos en eLife."""
+        articles = []
+
+        try:
+            params = {
+                "for": query,
+                "per-page": min(max_results, 100),
+                "page": 1,
+                "sort": "date",
+                "order": "desc",
+            }
+
+            time.sleep(0.5)
+            response = requests.get(self.BASE_URL, params=params, timeout=self.timeout)
+            response.raise_for_status()
+
+            data = response.json()
+            items = data.get("articles", [])
+
+            for item in items:
+                article = self._parse_item(item, year_start, year_end)
+                if article:
+                    articles.append(article)
+
+            return articles[:max_results]
+
+        except Exception as e:
+            print(f"Error en eLife: {str(e)}")
+            return []
+
+    def _parse_item(
+        self,
+        item: Dict[str, Any],
+        year_start: Optional[int],
+        year_end: Optional[int],
+    ) -> Optional[Article]:
+        """Parsea un artículo de eLife."""
+        title = item.get("title", "").strip()
+        if not title:
+            return None
+
+        # Año
+        year = None
+        published = item.get("published", "")
+        if published:
+            try:
+                year = int(published[:4])
+            except (ValueError, TypeError):
+                pass
+
+        # Filtrar por rango de años
+        if year:
+            if year_start and year < year_start:
+                return None
+            if year_end and year > year_end:
+                return None
+
+        # Autores
+        authors = []
+        authors_data = item.get("authors", [])
+        if isinstance(authors_data, list):
+            for author in authors_data[:5]:
+                if isinstance(author, dict):
+                    # eLife puede devolver dict con "name" o "surname"/"given"
+                    name = author.get("name", "").strip()
+                    if not name:
+                        given = author.get("given", "").strip()
+                        surname = author.get("surname", "").strip()
+                        name = f"{given} {surname}".strip()
+                    if name:
+                        authors.append(name)
+                elif isinstance(author, str):
+                    authors.append(author)
+
+        doi = item.get("doi", "").strip()
+        elife_url = f"https://elifesciences.org/articles/{item.get('id', '')}" if item.get("id") else ""
+        url = item.get("url", "") or elife_url or (f"https://doi.org/{doi}" if doi else "")
+
+        return Article(
+            title=title,
+            authors=authors,
+            year=year,
+            doi=doi,
+            url=url,
+            journal="eLife",
+            abstract=item.get("abstract", "").strip() or None,
+            source="elife",
+            full_data={},
+        )
+
+
 class LocalPdfAdapter(BaseAdapter):
     """Adaptador que lee metadatos de PDFs en una carpeta local."""
 
@@ -1182,6 +1285,7 @@ AVAILABLE_ADAPTERS = {
     "scopus": ScopusAdapter,
     "sciencedirect": ScienceDirectAdapter,
     "frontiers": FrontiersAdapter,
+    "elife": eLifeAdapter,
     "biorxiv": BioRxivAdapter,
     "plos": PlosAdapter,
     "local_pdf": LocalPdfAdapter,

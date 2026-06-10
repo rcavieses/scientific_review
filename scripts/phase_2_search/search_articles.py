@@ -44,6 +44,7 @@ SCOPUS_BASE = "https://api.elsevier.com/content/search/scopus"
 BIORXIV_BASE = "https://api.biorxiv.org/details"
 PLOS_BASE = "https://api.plos.org/search"
 FRONTIERS_BASE = "https://www.frontiersin.org/api/v1/articles"
+ELIFE_BASE = "https://api.elifesciences.org/v2/search"
 
 # Configuración
 MAX_RESULTS = 20  # máximo de artículos por especie
@@ -613,6 +614,83 @@ def search_frontiers(species_name: str, region_terms: list[str] | None = None) -
     return results
 
 
+def search_elife(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca artículos en eLife (open access, revisado por pares).
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados
+    """
+    results = []
+    try:
+        query = species_name
+        if region_terms:
+            region_query = " ".join(region_terms)
+            query = f'{query} {region_query}'
+
+        params = {
+            "for": query,
+            "per-page": MAX_RESULTS,
+            "page": 1,
+            "sort": "date",
+            "order": "desc",
+        }
+
+        time.sleep(0.5)
+        resp = requests.get(ELIFE_BASE, params=params, timeout=TIMEOUT)
+
+        if resp.status_code != 200:
+            return results
+
+        data = resp.json()
+        items = data.get("articles", [])
+
+        for item in items:
+            title = item.get("title", "").strip()
+            if not title:
+                continue
+
+            published = item.get("published", "")
+            year = int(published[:4]) if published else None
+
+            authors = []
+            authors_data = item.get("authors", [])
+            if isinstance(authors_data, list):
+                for author in authors_data[:3]:
+                    if isinstance(author, dict):
+                        name = author.get("name", "").strip()
+                        if not name:
+                            given = author.get("given", "").strip()
+                            surname = author.get("surname", "").strip()
+                            name = f"{given} {surname}".strip()
+                        if name:
+                            authors.append(name)
+                    elif isinstance(author, str):
+                        authors.append(author)
+
+            doi = item.get("doi", "").strip()
+            elife_url = f"https://elifesciences.org/articles/{item.get('id', '')}" if item.get("id") else ""
+            url = item.get("url", "") or elife_url or (f"https://doi.org/{doi}" if doi else "")
+
+            results.append({
+                "source": "eLife",
+                "doi": doi,
+                "title": title,
+                "authors": ", ".join(authors),
+                "year": str(year) if year else "",
+                "journal": "eLife",
+                "url": url,
+            })
+
+    except Exception as e:
+        logger.debug(f"Error en eLife para {species_name}: {e}")
+
+    return results
+
+
 def _title_contains_species(title: str, species_name: str) -> bool:
     """
     Verifica que el título del artículo contenga al menos una de las dos
@@ -651,6 +729,7 @@ def search_articles_for_species(species_name: str, region_terms: list[str] | Non
     all_results.extend(search_scopus(species_name, region_terms=region_terms))  # Si está configurado
     all_results.extend(search_sciencedirect(species_name, region_terms=region_terms))  # Si está configurado
     all_results.extend(search_frontiers(species_name, region_terms=region_terms))
+    all_results.extend(search_elife(species_name, region_terms=region_terms))
     all_results.extend(search_arxiv(species_name, region_terms=region_terms))
     all_results.extend(search_biorxiv(species_name, region_terms=region_terms))
     all_results.extend(search_plos(species_name, region_terms=region_terms))
