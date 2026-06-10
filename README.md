@@ -110,7 +110,13 @@ scientific_review/
 │   │   ├── download_pdfs.py
 │   │   ├── download_goc_pdfs.py
 │   │   ├── run_sciencedirect_download.py
-│   │   └── run_rescan_empty_species.py
+│   │   ├── run_rescan_empty_species.py
+│   │   └── sciencedirect_batch_downloader/  # Descargador institucional ScienceDirect
+│   │       ├── download_sciencedirect_api.py
+│   │       ├── test_api.py
+│   │       ├── run.sh
+│   │       ├── config.json
+│   │       └── README.md
 │   ├── phase_5_indexing/              # Fase 5: indexación RAG
 │   │   ├── indexar.py
 │   │   ├── indexar_paralelo.py
@@ -146,19 +152,15 @@ scientific_review/
 │   │   └── Rojo_Acosta_2025.pdf
 │   └── pipeline_presentation.pptx     # Presentación del pipeline
 │
-├── sciencedirect_batch_downloader/    # Descargador institucional ScienceDirect
-│
 ├── outputs/                           # Generado por el pipeline (gitignored)
 │   ├── state/                         # Archivos de progreso y estado del pipeline
-│   ├── pdfs/                          # PDFs organizados por especie
-│   ├── rag_index/                     # Índice FAISS fusionado (maestro)
-│   ├── reports/                       # Reportes generados
-│   ├── results/                       # CSVs de resultados
-│   └── logs/                          # Archivos de log
-│
-├── search_results/                    # CSVs de resultados por especie (gitignored)
-├── search_results_canonical/          # Resultados canonizados (gitignored)
-└── scopus_results/                    # Resultados Scopus separados (gitignored)
+│   ├── pdfs/                          # PDFs organizados por especie (PDF, PDF_GOC)
+│   ├── rag_index/                     # Índice FAISS fusionado (maestro) + batch indices
+│   ├── search_results/                # CSVs de resultados por especie (búsqueda multi-fuente)
+│   ├── search_results_canonical/      # Resultados canonizados por especies del pipeline
+│   ├── scopus_results/                # Resultados Scopus (búsqueda paralela)
+│   ├── sciencedirect_results/         # Resultados ScienceDirect
+│   └── reports/                       # Reportes generados
 ```
 
 ---
