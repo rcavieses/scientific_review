@@ -41,6 +41,8 @@ CROSSREF_BASE = "https://api.crossref.org/works"
 ARXIV_BASE = "http://export.arxiv.org/api/query"
 SCIENCEDIRECT_BASE = "https://api.elsevier.com/content/search/sciencedirect"
 SCOPUS_BASE = "https://api.elsevier.com/content/search/scopus"
+BIORXIV_BASE = "https://api.biorxiv.org/details"
+PLOS_BASE = "https://api.plos.org/search"
 
 # Configuración
 MAX_RESULTS = 20  # máximo de artículos por especie
@@ -409,6 +411,136 @@ def search_arxiv(species_name: str, region_terms: list[str] | None = None) -> li
     return results
 
 
+def search_biorxiv(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca preprints en BioRxiv/MedRxiv por nombre de especie.
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados
+    """
+    results = []
+    try:
+        import datetime
+
+        # BioRxiv API busca en últimos 365 días
+        today = datetime.date.today()
+        start_date = today - datetime.timedelta(days=365)
+
+        search_url = f"{BIORXIV_BASE}/biorxiv/{start_date.isoformat()}/{today.isoformat()}"
+        params = {"sort": "date", "direction": "descending"}
+
+        time.sleep(0.2)
+        resp = requests.get(search_url, params=params, timeout=TIMEOUT)
+
+        if resp.status_code != 200:
+            return results
+
+        data = resp.json()
+        query_lower = species_name.lower()
+
+        for preprint in data.get("collection", []):
+            title = preprint.get("title", "").lower()
+            abstract = preprint.get("abstract", "").lower()
+
+            # Buscar especie en título o abstract
+            if query_lower not in title and query_lower not in abstract:
+                continue
+
+            # Filtrar por región si se proporciona
+            if region_terms:
+                region_str = " ".join([t.lower() for t in region_terms])
+                if region_str not in title and region_str not in abstract:
+                    continue
+
+            doi = preprint.get("doi", "")
+            date_str = preprint.get("date", "")
+            year = int(date_str[:4]) if date_str else None
+
+            authors = preprint.get("authors", "")
+            if isinstance(authors, list):
+                author_list = authors[:3]
+            else:
+                author_list = [a.strip() for a in str(authors).split(",")[:3] if a.strip()]
+
+            results.append({
+                "source": "BioRxiv",
+                "doi": doi,
+                "title": preprint.get("title", ""),
+                "authors": ", ".join(author_list),
+                "year": str(year) if year else "",
+                "journal": "BioRxiv/MedRxiv",
+                "url": f"https://doi.org/{doi}" if doi else "",
+            })
+
+            if len(results) >= MAX_RESULTS:
+                break
+
+    except Exception as e:
+        logger.debug(f"Error en BioRxiv para {species_name}: {e}")
+
+    return results
+
+
+def search_plos(species_name: str, region_terms: list[str] | None = None) -> list[dict[str, Any]]:
+    """Busca artículos en PLOS (open access) por nombre de especie.
+
+    Args:
+        species_name: nombre de la especie a buscar
+        region_terms: términos geográficos opcionales para filtrar resultados
+
+    Returns:
+        Lista de artículos encontrados
+    """
+    results = []
+    try:
+        query = f'"{species_name}"'
+        if region_terms:
+            region_query = ' OR '.join([f'"{term}"' for term in region_terms])
+            query = f'{query} AND ({region_query})'
+
+        params = {
+            "q": query,
+            "wt": "json",
+            "rows": MAX_RESULTS,
+            "sort": "publication_date desc",
+        }
+
+        time.sleep(0.2)
+        resp = requests.get(PLOS_BASE, params=params, timeout=TIMEOUT)
+
+        if resp.status_code != 200:
+            return results
+
+        data = resp.json()
+        docs = data.get("response", {}).get("docs", [])
+
+        for doc in docs:
+            doi = doc.get("id", "")
+            publication_date = doc.get("publication_date", "")
+            year = int(publication_date[:4]) if publication_date else None
+
+            authors_list = doc.get("author_display", [])
+            authors = authors_list[:3] if authors_list else []
+
+            results.append({
+                "source": "PLOS",
+                "doi": doi,
+                "title": doc.get("title_display", ""),
+                "authors": ", ".join(authors),
+                "year": str(year) if year else "",
+                "journal": doc.get("journal_name", "PLOS"),
+                "url": f"https://doi.org/{doi}" if doi else "",
+            })
+
+    except Exception as e:
+        logger.debug(f"Error en PLOS para {species_name}: {e}")
+
+    return results
+
+
 def _title_contains_species(title: str, species_name: str) -> bool:
     """
     Verifica que el título del artículo contenga al menos una de las dos
@@ -447,6 +579,8 @@ def search_articles_for_species(species_name: str, region_terms: list[str] | Non
     all_results.extend(search_scopus(species_name, region_terms=region_terms))  # Si está configurado
     all_results.extend(search_sciencedirect(species_name, region_terms=region_terms))  # Si está configurado
     all_results.extend(search_arxiv(species_name, region_terms=region_terms))
+    all_results.extend(search_biorxiv(species_name, region_terms=region_terms))
+    all_results.extend(search_plos(species_name, region_terms=region_terms))
 
     # Filtro de relevancia: el título debe mencionar el nombre de la especie.
     # PubMed y Scopus ya son semánticamente precisos; CrossRef y ArXiv no.
