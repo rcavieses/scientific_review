@@ -142,11 +142,14 @@ def main():
 
     # Crear proveedor de LLM
     from pipeline.llm import get_llm_provider
+    llm_kwargs = {"verbose": args.verbose}
+    if args.llm_provider == "ollama":
+        llm_kwargs["host"] = args.ollama_host
+
     llm_provider = get_llm_provider(
         provider=args.llm_provider,
         model=args.llm_model,
-        host=args.ollama_host if args.llm_provider == "ollama" else None,
-        verbose=args.verbose
+        **llm_kwargs
     )
 
     # Inicializar Query Engine (RAG simple o GraphRAG)

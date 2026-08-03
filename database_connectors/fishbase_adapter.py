@@ -568,6 +568,7 @@ class FishBaseAdapter(DatabaseAdapter):
                 params=params,
                 timeout=self.timeout,
                 headers={"User-Agent": "scientific-review-pipeline/1.0"},
+                verify=False,  # Desactivar verificación SSL para FishBase
             )
             response.raise_for_status()
             payload = response.json()
