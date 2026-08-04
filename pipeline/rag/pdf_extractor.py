@@ -20,6 +20,73 @@ class PDFExtractionError(Exception):
     pass
 
 
+def _clean_extracted_text(text: str) -> str:
+    """
+    Limpieza específica para texto extraído de PDFs científicos.
+
+    - Une guiones de fin de línea: "hy-\nphen" → "hyphen"
+    - Colapsa saltos de línea en medio de párrafo
+    - Preserva doble \n (límites de párrafo)
+    - Elimina números de página aislados
+    - Normaliza espacios
+    """
+    if not text:
+        return ""
+
+    text = re.sub(r"-\n(\w)", r"\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+    text = re.sub(r"^\s*\d{1,4}\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r" {2,}", " ", text)
+    text = "".join(ch for ch in text if ch == "\n" or ord(ch) >= 32)
+
+    return text.strip()
+
+
+def _strip_repeated_headers(
+    pages: List[Tuple[int, str]], min_page_chars: int = 50
+) -> List[Tuple[int, str]]:
+    """
+    Detecta y elimina líneas que aparecen en ≥3 páginas (headers/footers).
+    """
+    if len(pages) < 4:
+        return pages
+
+    first_lines: List[str] = []
+    last_lines: List[str] = []
+
+    for _, text in pages:
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if lines:
+            first_lines.append(lines[0])
+            last_lines.append(lines[-1])
+
+    threshold = max(3, len(pages) // 2)
+
+    repeated_headers = {
+        line for line, count in Counter(first_lines).items()
+        if count >= threshold and len(line) > 3
+    }
+    repeated_footers = {
+        line for line, count in Counter(last_lines).items()
+        if count >= threshold and len(line) > 3
+    }
+    to_remove = repeated_headers | repeated_footers
+
+    if not to_remove:
+        return pages
+
+    cleaned: List[Tuple[int, str]] = []
+    for page_num, text in pages:
+        lines = text.split("\n")
+        filtered = [l for l in lines if l.strip() not in to_remove]
+        clean_text = "\n".join(filtered).strip()
+        if len(clean_text) >= min_page_chars:
+            cleaned.append((page_num, clean_text))
+
+    return cleaned if cleaned else pages
+
+
 class PDFExtractor(ABC):
     """Interfaz base para extractores de texto de PDFs."""
 
@@ -110,7 +177,7 @@ class PdfPlumberExtractor(PDFExtractor):
                 for page in pdf.pages:
                     page_num = page.page_number  # 1-based en pdfplumber
                     text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
-                    text = self._clean_extracted_text(text)
+                    text = _clean_extracted_text(text)
 
                     if len(text) >= self.min_page_chars:
                         raw_pages.append((page_num, text))
@@ -124,7 +191,7 @@ class PdfPlumberExtractor(PDFExtractor):
                 )
 
             if self.strip_headers:
-                raw_pages = self._strip_repeated_headers(raw_pages)
+                raw_pages = _strip_repeated_headers(raw_pages, self.min_page_chars)
 
             if self.verbose:
                 total_chars = sum(len(t) for _, t in raw_pages)

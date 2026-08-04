@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 import requests
 
-from .base import PDFExtractionError, OCRProvider
+from .base import OCRExtractionError as PDFExtractionError, OCRProvider
 
 
 class GrobidProvider(OCRProvider):
