@@ -1,0 +1,15 @@
+# Optional dependencies for local OCR mode (LocalUnlimitedOCRProvider)
+# Only needed if you have a GPU and want to run document parsing locally.
+#
+# Install with:
+#   pip install -r requirements-ocr-local.txt
+#
+# Requires CUDA 12.1+ and sufficient GPU memory (~20GB for Unlimited-OCR model).
+
+torch==2.10.0
+torchvision==0.25.0
+transformers==4.57.1
+Pillow==12.1.1
+einops==0.8.2
+addict==2.4.0
+easydict==1.13

@@ -5,13 +5,14 @@ Conecta PDFExtractor, TextChunker, EmbeddingGenerator y VectorDBManager
 manteniendo cada componente independiente entre sí.
 """
 
+import os
 import re
 import unicodedata
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from .models import ChunkData, ChunkVector
-from .pdf_extractor import PDFExtractor, PdfPlumberExtractor, PDFExtractionError
+from .pdf_extractor import PDFExtractor, PdfPlumberExtractor, GrobidPDFExtractor, PDFExtractionError
 from .text_chunker import TextChunker
 from .vector_db import VectorDBManager
 from .metadata_registry import MetadataRegistry
@@ -241,7 +242,23 @@ class RAGPipelineOrchestrator:
     def _init_components(self) -> None:
         """Inicializa los componentes con defaults si no se proporcionaron."""
         if self._extractor is None:
-            self._extractor = PdfPlumberExtractor(verbose=self.verbose)
+            extractor_name = os.getenv("PDF_EXTRACTOR", "grobid").lower()
+
+            if extractor_name == "grobid":
+                try:
+                    grobid_url = os.getenv("GROBID_URL", "http://localhost:8070")
+                    self._extractor = GrobidPDFExtractor(
+                        grobid_url=grobid_url,
+                        verbose=self.verbose
+                    )
+                    if self.verbose:
+                        print(f"  Usando extractor GROBID ({grobid_url})")
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  Aviso: No se pudo inicializar GROBID ({e}), usando pdfplumber como fallback")
+                    self._extractor = PdfPlumberExtractor(verbose=self.verbose)
+            else:
+                self._extractor = PdfPlumberExtractor(verbose=self.verbose)
 
         if self._chunker is None:
             self._chunker = TextChunker(verbose=self.verbose)

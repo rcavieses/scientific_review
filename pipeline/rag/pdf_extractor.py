@@ -1,8 +1,9 @@
 """
 Extracción de texto de PDFs científicos.
 
-Usa pdfplumber para manejar correctamente layouts de dos columnas,
-tablas y texto con símbolos matemáticos típicos de papers científicos.
+Soporta múltiples extractores:
+- GROBID (recomendado para papers científicos): extrae estructura + metadata
+- pdfplumber (fallback): extrae texto plano de PDFs nativos
 """
 
 import re
@@ -220,3 +221,92 @@ class PdfPlumberExtractor(PDFExtractor):
                 cleaned.append((page_num, clean_text))
 
         return cleaned if cleaned else pages
+
+
+class GrobidPDFExtractor(PDFExtractor):
+    """
+    PDF extractor using GROBID (GeneRation Of BIbliographic Data).
+
+    GROBID is specifically designed for scientific papers and extracts:
+    - Title, authors, abstract
+    - Document structure (sections, subsections)
+    - References and bibliographic data
+    - Tables and figure captions
+
+    GROBID runs as a service (Docker container) and provides superior
+    extraction quality for academic papers compared to generic PDF tools.
+
+    Args:
+        grobid_url: URL of GROBID service (default: http://localhost:8070)
+        min_page_chars: Minimum characters per section to keep (default: 50)
+        strip_headers: Whether to remove repeated headers/footers (default: True)
+        verbose: Print progress information (default: False)
+    """
+
+    def __init__(
+        self,
+        grobid_url: Optional[str] = None,
+        min_page_chars: int = 50,
+        strip_headers: bool = True,
+        verbose: bool = False,
+    ):
+        from pipeline.ocr import GrobidProvider
+
+        self.grobid_provider = GrobidProvider(grobid_url=grobid_url)
+        self.min_page_chars = min_page_chars
+        self.strip_headers = strip_headers
+        self.verbose = verbose
+
+    def extract(self, pdf_path: Path) -> str:
+        """Extrae y concatena el texto de todas las secciones."""
+        pages = self.extract_by_pages(pdf_path)
+        return "\n\n".join(text for _, text in pages)
+
+    def extract_by_pages(self, pdf_path: Path) -> List[Tuple[int, str]]:
+        """
+        Extract text from PDF using GROBID.
+
+        Returns:
+            List of (section_number, text) tuples.
+            Sections are logically organized (abstract, body, references)
+            rather than physical pages.
+        """
+        pdf_path = Path(pdf_path)
+
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF no encontrado: {pdf_path}")
+
+        try:
+            if self.verbose:
+                print(f"  Extrayendo (GROBID) {pdf_path.name}...")
+
+            raw_pages = self.grobid_provider.extract_pdf(pdf_path)
+
+            pages: List[Tuple[int, str]] = []
+            for section_num, text in raw_pages:
+                text = _clean_extracted_text(text)
+                if len(text) >= self.min_page_chars:
+                    pages.append((section_num, text))
+                elif self.verbose:
+                    print(f"    Sección {section_num} ignorada ({len(text)} chars)")
+
+            if not pages:
+                raise PDFExtractionError(
+                    f"No se pudo extraer texto útil de {pdf_path.name} (GROBID)."
+                )
+
+            if self.strip_headers:
+                pages = _strip_repeated_headers(pages, self.min_page_chars)
+
+            if self.verbose:
+                total_chars = sum(len(t) for _, t in pages)
+                print(f"  Extraidas {len(pages)} secciones, {total_chars} caracteres")
+
+            return pages
+
+        except PDFExtractionError:
+            raise
+        except Exception as e:
+            raise PDFExtractionError(
+                f"Error GROBID extrayendo {pdf_path.name}: {type(e).__name__}: {e}"
+            ) from e
