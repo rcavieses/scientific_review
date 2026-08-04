@@ -1,13 +1,13 @@
 """
-pipeline.llm: Abstracción de proveedores de modelos de lenguaje.
+pipeline.llm: Abstraction layer for language model providers.
 
-Proporciona una interfaz unificada para usar diferentes proveedores de LLM
-(Claude API, Ollama, etc.) en los componentes RAG del proyecto.
+Provides a unified interface to use different LLM providers
+(Claude API, Ollama, etc.) in the project's RAG components.
 
-Ejemplo:
+Example:
     >>> from pipeline.llm import get_llm_provider
     >>> provider = get_llm_provider(provider="ollama", model="llama3")
-    >>> response = provider.generate("Eres un asistente", "¿Qué es Ollama?")
+    >>> response = provider.generate("You are a helpful assistant", "What is Ollama?")
 """
 
 from .base import LLMProvider

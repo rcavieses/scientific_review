@@ -125,3 +125,7 @@ species_with_pdfs.json
 species_with_pdfs.txt
 species_in_index.txt
 pdfs_indexed.txt
+
+# ── Modelos de embeddings (se descargan localmente) ────────────────────────
+models/
+!models/.gitkeep

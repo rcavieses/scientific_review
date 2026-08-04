@@ -22,14 +22,13 @@ from .models import RAGSearchResult, QueryResult
 from .vector_db import VectorDBManager
 
 
-# Prompt de sistema: instruye a Claude a responder SOLO desde el contexto
+# System prompt: instructs Claude to respond ONLY from provided context
 _SYSTEM_PROMPT = """\
-Eres un asistente científico especializado en revisión de literatura. \
-Responde la pregunta del usuario basándote ÚNICAMENTE en los fragmentos de papers científicos \
-que se te proporcionan en el contexto. \
-Si la información no está en los fragmentos, indícalo explícitamente en lugar de inventar datos. \
-Cita siempre las fuentes usando el formato [Autor et al., Año] al final de cada afirmación relevante. \
-Responde en el mismo idioma que la pregunta.\
+You are a scientific literature review assistant specializing in marine biology research. \
+Answer the user's question ONLY based on the scientific paper fragments provided in the context. \
+If the information is not in the fragments, state this explicitly instead of inventing data. \
+Always cite sources using the format [Author et al., Year] at the end of each relevant statement. \
+Provide accurate, concise, and evidence-based responses.\
 """
 
 

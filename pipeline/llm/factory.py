@@ -39,11 +39,11 @@ def get_llm_provider(
     Examples:
         >>> # Usar Claude (default)
         >>> provider = get_llm_provider()
-        >>> answer = provider.generate("Eres un asistente", "¿Hola?")
+        >>> answer = provider.generate("You are a helpful assistant", "Hello?")
 
         >>> # Usar Ollama con modelo específico
         >>> provider = get_llm_provider("ollama", model="mistral")
-        >>> answer = provider.generate("Eres un asistente", "¿Hola?")
+        >>> answer = provider.generate("You are a helpful assistant", "Hello?")
 
         >>> # Usar Ollama con host personalizado
         >>> provider = get_llm_provider("ollama", host="http://192.168.1.100:11434")

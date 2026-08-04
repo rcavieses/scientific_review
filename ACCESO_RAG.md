@@ -164,7 +164,7 @@ curl -X POST http://localhost:8000/api/query \
     }
   ],
   "chunks_used": 5,
-  "model": "claude-sonnet-4-6",
+  "model": "claude-haiku-4-5-20251001",
   "execution_time_ms": 2350.5,
   "fishbase_data": "..."
 }
@@ -251,7 +251,7 @@ db = VectorDBManager(
 db.load()
 
 # Crear motor RAG
-llm_provider = get_llm_provider(provider="claude", model="claude-sonnet-4-6")
+llm_provider = get_llm_provider(provider="claude", model="claude-haiku-4-5-20251001")
 engine = RAGQueryEngine(vector_db=db, llm_provider=llm_provider)
 
 # Ejecutar consulta

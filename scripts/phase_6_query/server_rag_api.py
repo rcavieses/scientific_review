@@ -110,6 +110,7 @@ def init_rag_engine(index_dir: str = "outputs/rag_index_goc"):
         from pipeline.rag import VectorDBManager
         from pipeline.rag.query_engine import RAGQueryEngine
         from pipeline.llm import get_llm_provider
+        from pipeline.embeddings.embedding_generator import get_embedding_generator
 
         index_path = Path(index_dir)
         config_file = index_path / "index_config.json"
@@ -132,17 +133,24 @@ def init_rag_engine(index_dir: str = "outputs/rag_index_goc"):
         # Crear motor RAG
         llm_provider = get_llm_provider(
             provider="claude",
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
+            verbose=False,
+        )
+
+        embedding_generator = get_embedding_generator(
+            provider="local",
+            cache_folder=str(PROJECT_ROOT / "models" / "embeddings"),
             verbose=False,
         )
 
         _engine = RAGQueryEngine(
             vector_db=_db,
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             top_k=5,
             max_tokens=1500,
             min_score=0.2,
             llm_provider=llm_provider,
+            embedding_generator=embedding_generator,
             verbose=False,
         )
 
@@ -269,41 +277,41 @@ async def query_rag(request: QueryRequest):
         final_answer = result.answer
         if fishbase_data:
             try:
-                # Crear un prompt que enriquezca la respuesta con datos de FishBase
-                enrichment_prompt = f"""La respuesta anterior no contenía información suficiente.
-Aquí hay datos adicionales de FishBase para la especie {fishbase_species}:
+                # Create a prompt that enriches the response with FishBase data
+                enrichment_prompt = f"""The previous response did not contain sufficient information.
+Here is additional FishBase data for species {fishbase_species}:
 
 {fishbase_data}
 
-Por favor, enriquece tu respuesta anterior integrando estos datos de FishBase.
-Combina información de ambas fuentes (papers científicos + FishBase) en una respuesta coherente.
-Cita FishBase cuando uses sus datos."""
+Please enrich your previous response by integrating this FishBase data.
+Combine information from both sources (scientific papers + FishBase) in a coherent response.
+Cite FishBase when using its data."""
 
-                enrichment_message = f"""Pregunta original: {request.question}
+                enrichment_message = f"""Original question: {request.question}
 
-Datos de FishBase para {fishbase_species}:
+FishBase data for {fishbase_species}:
 {fishbase_data}
 
-Respuesta anterior (basada en papers científicos):
+Previous response (based on scientific papers):
 {result.answer}
 
 ---
 
-Por favor, crea una respuesta MEJORADA que integre TANTO los datos de los papers científicos COMO los datos de FishBase.
-Destaca claramente qué información viene de cada fuente.
-Usa el formato: [Fuente: FishBase] para datos de FishBase y [Autor et al., Año] para papers."""
+Please create an IMPROVED response that integrates BOTH scientific paper data AND FishBase data.
+Clearly highlight which information comes from each source.
+Use the format: [Source: FishBase] for FishBase data and [Author et al., Year] for papers."""
 
                 enriched_response = _llm_provider.generate(
-                    system_prompt="Eres un asistente científico experto. Tu tarea es integrar información de múltiples fuentes (papers científicos y FishBase) para dar respuestas completas y precisas sobre especies marinas.",
+                    system_prompt="You are an expert scientific assistant. Your task is to integrate information from multiple sources (scientific papers and FishBase) to provide complete and accurate answers about marine species.",
                     user_message=enrichment_message,
                     max_tokens=1500,
                 )
 
                 if enriched_response and enriched_response.strip():
                     final_answer = enriched_response
-                    logger.info(f"✓ Respuesta enriquecida con datos de FishBase ({fishbase_species})")
+                    logger.info(f"✓ Response enriched with FishBase data ({fishbase_species})")
             except Exception as e:
-                logger.warning(f"Error enriqueciendo respuesta con FishBase: {e}")
+                logger.warning(f"Error enriching response with FishBase: {e}")
                 # Usar la respuesta original si hay error
 
         elapsed = (time.time() - start) * 1000

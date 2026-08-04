@@ -112,10 +112,16 @@ def main():
         help="Similitud coseno mínima (default: 0.2)",
     )
     parser.add_argument(
+        "--provider",
+        default="claude",
+        choices=["claude", "ollama"],
+        help="Proveedor de LLM (default: claude). Opciones: claude, ollama",
+    )
+    parser.add_argument(
         "--model",
         dest="llm_model",
-        default="claude-sonnet-4-6",
-        help="Modelo LLM a usar (default: claude-sonnet-4-6)",
+        default="claude-haiku-4-5-20251001",
+        help="Modelo LLM a usar (default: claude-haiku-4-5-20251001 para claude, qwen3:14b para ollama)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -188,14 +194,26 @@ def main():
     # Crear proveedor LLM
     from pipeline.llm import get_llm_provider
 
+    # Usar modelo default según provider si no se especificó
+    model_to_use = args.llm_model
+    if args.provider == "ollama" and args.llm_model == "claude-haiku-4-5-20251001":
+        model_to_use = "qwen3:14b"
+
     llm_provider = get_llm_provider(
-        provider="claude",
-        model=args.llm_model,
+        provider=args.provider,
+        model=model_to_use,
         verbose=args.verbose,
     )
 
     # Crear query engine RAG
     from pipeline.rag.query_engine import RAGQueryEngine
+    from pipeline.embeddings.embedding_generator import get_embedding_generator
+
+    embedding_generator = get_embedding_generator(
+        provider="local",
+        cache_folder=str(PROJECT_ROOT / "models" / "embeddings"),
+        verbose=args.verbose,
+    )
 
     engine = RAGQueryEngine(
         vector_db=db,
@@ -204,6 +222,7 @@ def main():
         max_tokens=args.max_tokens,
         min_score=args.min_score,
         llm_provider=llm_provider,
+        embedding_generator=embedding_generator,
         verbose=args.verbose,
     )
 

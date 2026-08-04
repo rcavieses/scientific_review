@@ -1,6 +1,6 @@
 # 🚀 Inicio Rápido - RAG para Colegas
 
-## 📝 En 3 pasos:
+## 📝 En 4 pasos:
 
 ### 1️⃣ Clonar/descargar el proyecto
 ```bash
@@ -12,7 +12,13 @@ cd /path/a/proyecto
 pip install -r requirements.txt
 ```
 
-### 3️⃣ Ejecutar el servidor
+### 3️⃣ Descargar modelo de embeddings (una sola vez)
+```bash
+python3 setup_embeddings.py
+```
+**Esto descarga ~88 MB localmente. Primera ejecución: ~30-50 segundos.**
+
+### 4️⃣ Ejecutar el servidor
 ```bash
 ./iniciar_rag.sh
 ```
