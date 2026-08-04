@@ -1,120 +1,150 @@
 #!/usr/bin/env python3
 """
-Reconstruye índice FAISS con GROBID + chunking semántico.
+Reconstrucción FINAL del índice RAG con chunking semántico completo.
 
-Pipeline completo:
-  1. Extrae PDFs con GROBID
-  2. Aplica chunking semántico (mantiene contexto)
-  3. Genera embeddings con BERT
-  4. Indexa en FAISS
-
-Uso:
-    python3 scripts/rebuild_index_final.py
+Optimizado para máxima extracción y calidad de chunks.
 """
 
 import sys
 from pathlib import Path
+from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.rag.rag_pipeline import RAGPipelineOrchestrator
 from pipeline.rag.semantic_chunker import SemanticChunker
-from pipeline.rag.pdf_extractor import GrobidPDFExtractor
+from pipeline.rag.pdf_extractor import GrobidPDFExtractor, PdfPlumberExtractor
+from pipeline.rag.vector_db import VectorDBManager
+from pipeline.rag.models import ChunkData, ChunkVector
 from pipeline.embeddings.embedding_generator import get_embedding_generator
+
+import logging
+
+# Configuración
+PDF_DIR = PROJECT_ROOT / "outputs" / "PDF_GOC" / "PDF"
+INDEX_DIR = PROJECT_ROOT / "outputs" / "rag_index_goc_full"
+LOGS_DIR = PROJECT_ROOT / "outputs" / "logs"
+
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOGS_DIR / "rebuild_final.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
 
 
 def main():
-    pdf_dir = Path("outputs/PDF_GOC/PDF")
-    index_dir = Path("outputs/rag_index_goc")
+    logger.info("=" * 80)
+    logger.info("🔨 RECONSTRUCCIÓN FINAL DE ÍNDICE CON CHUNKING SEMÁNTICO")
+    logger.info("=" * 80)
 
-    print(f"\n{'='*70}")
-    print("🚀 PIPELINE FINAL: GROBID + CHUNKING SEMÁNTICO + INDEXACIÓN")
-    print(f"{'='*70}\n")
-
-    print(f"📋 Configuración:")
-    print(f"   PDFs: {pdf_dir} ({len(list(pdf_dir.glob('*.pdf')))} archivos)")
-    print(f"   Índice: {index_dir}")
-    print(f"   Extractor: GROBID")
-    print(f"   Chunking: Semántico (BERT)")
-    print(f"   Modelo: all-MiniLM-L6-v2 (384 dims)\n")
-
-    # Limpiar índice anterior
-    print("🧹 Limpiando índice anterior...")
-    for f in index_dir.glob("*"):
-        f.unlink()
-    print("   ✓ Limpiado\n")
-
-    # Crear componentes
-    print("🔧 Inicializando componentes...")
-
-    # 1. Extractor: GROBID
-    extractor = GrobidPDFExtractor(verbose=False)
-    print("   ✓ GROBID extractor")
-
-    # 2. Embedding generator
-    embedding_gen = get_embedding_generator(provider="local", verbose=False)
-    print("   ✓ Embedding generator (BERT)")
-
-    # 3. Chunker: Semántico
-    chunker = SemanticChunker(
-        embedding_generator=embedding_gen,
-        similarity_threshold=0.4,
-        min_chunk_size=50,
-        max_chunk_size=800,
+    # Paso 1: Crear generador de embeddings
+    logger.info("\n1️⃣  Inicializando embeddings (all-MiniLM-L6-v2)...")
+    embedding_generator = get_embedding_generator(
+        provider="local",
+        model="all-MiniLM-L6-v2",
+        cache_folder=str(PROJECT_ROOT / "models" / "embeddings"),
         verbose=False,
     )
-    print("   ✓ Semantic chunker")
+    logger.info("   ✓ Embeddings listos (384 dimensiones)")
 
-    # Crear orchestrator con componentes personalizados
-    print("\n🔄 Iniciando pipeline...")
-    orchestrator = RAGPipelineOrchestrator(
-        pdf_dir=pdf_dir,
-        index_dir=index_dir,
-        extractor=extractor,
-        chunker=chunker,
-        embedding_generator=embedding_gen,
-        skip_indexed=False,
+    # Paso 2: Crear semantic chunker
+    logger.info("\n2️⃣  Configurando chunker semántico...")
+    chunker = SemanticChunker(
+        embedding_generator=embedding_generator,
+        similarity_threshold=0.5,
+        min_chunk_size=300,
+        max_chunk_size=1000,
         verbose=True,
     )
+    logger.info("   ✓ Chunker semántico listo")
 
-    print(f"\n{'='*70}\n")
+    # Paso 3: Crear extractores
+    logger.info("\n3️⃣  Configurando extractores (GROBID + pdfplumber)...")
+    grobid = GrobidPDFExtractor()
+    pdfplumber = PdfPlumberExtractor()
+    logger.info("   ✓ Extractores listos")
 
-    # Ejecutar
-    result = orchestrator.run()
+    # Paso 4: Crear base de datos vectorial
+    logger.info("\n4️⃣  Creando índice FAISS...")
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    vector_db = VectorDBManager(
+        index_dir=INDEX_DIR,
+        embedding_dim=384,
+        index_type="FlatIP",
+        verbose=True,
+    )
+    logger.info("   ✓ Índice creado")
 
-    # Resultados
-    print(f"\n\n{'='*70}")
-    print("✅ INDEXACIÓN COMPLETADA")
-    print(f"{'='*70}\n")
+    # Paso 5: Procesar todos los PDFs
+    logger.info("\n5️⃣  Procesando 433 PDFs...")
+    pdfs = sorted(PDF_DIR.glob("*.pdf"))
+    total_chunks = 0
+    failed = []
 
-    print(f"📊 Resultados:")
-    print(f"   PDFs procesados: {result['processed']}")
-    print(f"   PDFs saltados:   {result['skipped']}")
-    print(f"   PDFs con error:  {len(result['failed'])}")
-    print(f"   Total chunks:    {result['total_chunks']:,}")
+    for i, pdf_path in enumerate(pdfs, 1):
+        try:
+            # Intentar con GROBID primero
+            try:
+                pages = grobid.extract_pdf(pdf_path)
+            except Exception as e:
+                logger.warning(f"  GROBID falló para {pdf_path.name}, usando pdfplumber")
+                pages = pdfplumber.extract_by_pages(pdf_path)
 
-    if result["total_chunks"] > 0 and result["processed"] > 0:
-        avg_chunks = result["total_chunks"] / result["processed"]
-        print(f"   Promedio:        {avg_chunks:.1f} chunks/PDF")
+            # Chunkear semánticamente
+            chunks = chunker.chunk_pages(pages, pdf_path.stem, str(pdf_path))
 
-    print(f"\n💾 Índice guardado en: {index_dir}")
-    print(f"   • index.faiss")
-    print(f"   • metadata_store.json")
-    print(f"   • index_config.json")
+            if not chunks:
+                continue
 
-    if result["failed"]:
-        print(f"\n⚠️  Errores ({len(result['failed'])} PDFs):")
-        for pdf_path, error in result["failed"][:5]:
-            print(f"   • {pdf_path.name}: {str(error)[:60]}...")
+            # Generar embeddings
+            texts = [c.text for c in chunks]
+            vectors = embedding_generator.batch_generate(texts)
 
-    print(f"\n{'='*70}")
-    print("✨ Listo para probar el RAG")
-    print(f"{'='*70}\n")
+            # Crear ChunkVectors
+            chunk_vectors = [
+                ChunkVector(chunk=chunk, vector=vectors[j], embedding_model="all-MiniLM-L6-v2")
+                for j, chunk in enumerate(chunks)
+            ]
 
-    return result["total_chunks"] > 0
+            # Agregar al índice
+            vector_db.add_chunks(chunk_vectors)
+            total_chunks += len(chunk_vectors)
+
+            # Log cada 50 PDFs
+            if i % 50 == 0:
+                logger.info(f"   [{i:3d}/433] {total_chunks:5d} chunks acumulados")
+
+        except Exception as e:
+            logger.error(f"   ❌ Error con {pdf_path.name}: {e}")
+            failed.append(pdf_path.name)
+
+    # Paso 6: Guardar índice
+    logger.info("\n6️⃣  Guardando índice...")
+    vector_db.save()
+    logger.info("   ✓ Índice guardado")
+
+    # Resumen
+    logger.info("\n" + "=" * 80)
+    logger.info("📊 RESUMEN FINAL")
+    logger.info("=" * 80)
+    logger.info(f"  PDFs procesados: {len(pdfs) - len(failed)}/{len(pdfs)}")
+    logger.info(f"  Chunks totales: {total_chunks}")
+    logger.info(f"  Tamaño promedio chunk: {total_chunks / (len(pdfs) - len(failed)):.0f} chars")
+
+    if failed:
+        logger.warning(f"  PDFs fallidos: {len(failed)}")
+        for pdf_name in failed:
+            logger.warning(f"    - {pdf_name}")
+
+    logger.info(f"\n✅ Índice completado en: {INDEX_DIR}")
+    logger.info(f"{'=' * 80}\n")
 
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    main()
