@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 from .models import ChunkData, ChunkVector
 from .pdf_extractor import PDFExtractor, PdfPlumberExtractor, GrobidPDFExtractor, PDFExtractionError
 from .text_chunker import TextChunker
+from .semantic_chunker import SemanticChunker
 from .vector_db import VectorDBManager
 from .metadata_registry import MetadataRegistry
 
@@ -260,14 +261,29 @@ class RAGPipelineOrchestrator:
             else:
                 self._extractor = PdfPlumberExtractor(verbose=self.verbose)
 
-        if self._chunker is None:
-            self._chunker = TextChunker(verbose=self.verbose)
-
         if self._embedding_generator is None:
             from pipeline.embeddings.embedding_generator import get_embedding_generator
             self._embedding_generator = get_embedding_generator(
                 provider="local", verbose=self.verbose
             )
+
+        if self._chunker is None:
+            chunker_type = os.getenv("CHUNKER_TYPE", "semantic").lower()
+
+            if chunker_type == "semantic":
+                self._chunker = SemanticChunker(
+                    embedding_generator=self._embedding_generator,
+                    similarity_threshold=float(os.getenv("SEMANTIC_THRESHOLD", "0.5")),
+                    min_chunk_size=int(os.getenv("MIN_CHUNK_SIZE", "300")),
+                    max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", "1000")),
+                    verbose=self.verbose
+                )
+                if self.verbose:
+                    print(f"  Usando SemanticChunker (threshold={os.getenv('SEMANTIC_THRESHOLD', '0.5')})")
+            else:
+                self._chunker = TextChunker(verbose=self.verbose)
+                if self.verbose:
+                    print(f"  Usando TextChunker (tamaño={2000} chars)")
 
         if self._db is None:
             dim = self._embedding_generator.get_dimension()
