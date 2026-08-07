@@ -243,7 +243,7 @@ class RAGPipelineOrchestrator:
     def _init_components(self) -> None:
         """Inicializa los componentes con defaults si no se proporcionaron."""
         if self._extractor is None:
-            extractor_name = os.getenv("PDF_EXTRACTOR", "grobid").lower()
+            extractor_name = os.getenv("PDF_EXTRACTOR", "pdfplumber").lower()
 
             if extractor_name == "grobid":
                 try:

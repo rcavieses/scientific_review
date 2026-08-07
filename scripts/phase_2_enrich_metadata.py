@@ -163,17 +163,19 @@ class MetadataEnricher:
         return metadata
 
     def enrich_chunk(self, chunk: Dict[str, Any], pdf_metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Agrega metadatos bibliográficos a un chunk."""
-        chunk["metadata"] = chunk.get("metadata", {})
-        chunk["metadata"].update(
-            {
-                "source_pdf": pdf_metadata["source_pdf"],
-                "paper_title": pdf_metadata.get("title"),
-                "paper_authors": pdf_metadata.get("authors", []),
-                "paper_year": pdf_metadata.get("year"),
-                "paper_doi": pdf_metadata.get("doi"),
-            }
-        )
+        """
+        Agrega metadatos bibliográficos a un chunk.
+
+        Escribe en los campos de nivel superior (title/authors/year/doi),
+        que son los que lee VectorDBManager.search() al construir
+        RAGSearchResult. Antes esto escribía en chunk["metadata"] (anidado,
+        con otros nombres de campo) que nadie más leía — los metadatos
+        quedaban calculados pero inertes.
+        """
+        chunk["title"] = pdf_metadata.get("title")
+        chunk["authors"] = pdf_metadata.get("authors", [])
+        chunk["year"] = pdf_metadata.get("year")
+        chunk["doi"] = pdf_metadata.get("doi")
         return chunk
 
 
@@ -231,11 +233,15 @@ def enrich_metadata_store():
             failed_count += len(chunk_ids)
             continue
 
-        logger.info(f"  [{i:3d}/{len(chunks_by_pdf)}] {pdf_source}...", end="")
+        logger.info(f"  [{i:3d}/{len(chunks_by_pdf)}] {pdf_source}...")
 
         try:
-            # Extraer metadatos
-            pdf_metadata = enricher.extract_from_grobid_xml(pdf_path)
+            # NOTA: No hay servicio GROBID real disponible en este entorno
+            # (solo un mock que devuelve datos genéricos fabricados para
+            # cualquier PDF). Usamos el fallback por nombre de archivo, que
+            # da datos reales aunque limitados (autor/año), en vez de
+            # arriesgar metadatos bibliográficos fabricados/incorrectos.
+            pdf_metadata = enricher._extract_from_filename(pdf_path)
 
             # Enriquecer todos los chunks de este PDF
             for chunk_id in chunk_ids:
@@ -284,15 +290,13 @@ def calculate_metadata_stats(metadata_store: Dict) -> Dict[str, Any]:
     }
 
     for chunk_data in metadata_store.values():
-        metadata = chunk_data.get("metadata", {})
-
-        if metadata.get("paper_title"):
+        if chunk_data.get("title"):
             stats["chunks_with_title"] += 1
-        if metadata.get("paper_authors"):
+        if chunk_data.get("authors"):
             stats["chunks_with_authors"] += 1
-        if metadata.get("paper_year"):
+        if chunk_data.get("year"):
             stats["chunks_with_year"] += 1
-        if metadata.get("paper_doi"):
+        if chunk_data.get("doi"):
             stats["chunks_with_doi"] += 1
 
     # Completeness: promedio de campos disponibles

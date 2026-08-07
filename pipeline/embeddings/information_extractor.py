@@ -4,7 +4,7 @@ Extrae información relevante de artículos para embeddings.
 
 import re
 from typing import List, Optional, Tuple
-from scientific_search import Article
+# from scientific_search import Article  # Module moved to Antiguo/
 from .models import ExtractedData
 
 

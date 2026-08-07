@@ -176,7 +176,7 @@ class PdfPlumberExtractor(PDFExtractor):
 
                 for page in pdf.pages:
                     page_num = page.page_number  # 1-based en pdfplumber
-                    text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+                    text = self._extract_page_text(page)
                     text = _clean_extracted_text(text)
 
                     if len(text) >= self.min_page_chars:
@@ -205,6 +205,28 @@ class PdfPlumberExtractor(PDFExtractor):
             raise PDFExtractionError(
                 f"Error leyendo {pdf_path.name}: {type(e).__name__}: {e}"
             ) from e
+
+    def _extract_page_text(self, page) -> str:
+        """
+        Extrae el texto de una página, manejando el caso de tablas/bloques
+        rotados 90° (común en tablas de datos anchas tipo landscape
+        incrustadas en páginas portrait).
+
+        pdfplumber.extract_text() ordena los caracteres geométricamente por
+        (top, x0) asumiendo texto horizontal. Para texto rotado esto produce
+        una lectura completamente desordenada (glifos correctos, orden
+        arbitrario). El orden real del stream del PDF suele ser el correcto
+        para estos bloques, así que se usa use_text_flow=True (respeta el
+        orden del stream) con un y_tolerance más alto para agrupar palabras
+        correctamente en el eje rotado.
+        """
+        chars = page.chars
+        if chars:
+            n_rotated = sum(1 for c in chars if not c.get("upright", True))
+            if n_rotated / len(chars) > 0.5:
+                return page.extract_text(x_tolerance=3, y_tolerance=8, use_text_flow=True) or ""
+
+        return page.extract_text(x_tolerance=3, y_tolerance=3) or ""
 
     def _clean_extracted_text(self, text: str) -> str:
         """

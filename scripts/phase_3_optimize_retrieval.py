@@ -17,6 +17,7 @@ Salida:
 import sys
 import json
 import logging
+import dataclasses
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Set
@@ -27,6 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from pipeline.rag.vector_db import VectorDBManager
+from pipeline.rag.models import RAGSearchResult
 from pipeline.embeddings.embedding_generator import get_embedding_generator
 
 # Configuración
@@ -108,7 +110,7 @@ class RetrievelOptimizer:
         return duplicates
 
     def rank_search_results(
-        self, query: str, results: List[Tuple[float, str, Dict]], top_k: int = 5
+        self, query: str, results: List[RAGSearchResult], top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
         Re-ranking inteligente de resultados de búsqueda.
@@ -127,47 +129,42 @@ class RetrievelOptimizer:
 
         seen_pdfs: Set[str] = set()
 
-        for similarity_score, chunk_id, chunk_data in results:
-            metadata = chunk_data.get("metadata", {})
-
+        for r in results:
             # Score base: similitud semántica
-            base_score = similarity_score
+            base_score = r.score
 
             # Bonus por completitud de metadatos
             metadata_bonus = 0.0
-            if metadata.get("paper_title"):
+            if r.title:
                 metadata_bonus += 0.02
-            if metadata.get("paper_authors"):
+            if r.authors:
                 metadata_bonus += 0.02
-            if metadata.get("paper_year"):
+            if r.year:
                 metadata_bonus += 0.02
-            if metadata.get("paper_doi"):
+            if r.doi:
                 metadata_bonus += 0.01
 
             # Bonus por recencia (años después de 1990 = -5 = bonus)
             recency_bonus = 0.0
-            year = metadata.get("paper_year")
-            if year and year >= 2000:
-                recency_bonus = (year - 2000) * 0.001  # +0.001 por año después de 2000
+            if r.year and r.year >= 2000:
+                recency_bonus = (r.year - 2000) * 0.001  # +0.001 por año después de 2000
 
             # Score final
             final_score = base_score + metadata_bonus + recency_bonus
 
-            pdf_source = chunk_data.get("source_pdf", "unknown")
-
             scored_results.append(
                 {
-                    "chunk_id": chunk_id,
-                    "similarity_score": float(similarity_score),
+                    "chunk_id": r.chunk_id,
+                    "similarity_score": float(base_score),
                     "metadata_bonus": metadata_bonus,
                     "recency_bonus": recency_bonus,
                     "final_score": final_score,
-                    "pdf": pdf_source,
-                    "text": chunk_data.get("text", "")[:200] + "...",
-                    "title": metadata.get("paper_title", "N/A"),
-                    "authors": metadata.get("paper_authors", []),
-                    "year": metadata.get("paper_year", "N/A"),
-                    "doi": metadata.get("paper_doi", "N/A"),
+                    "pdf": r.source_pdf,
+                    "text": r.text[:200] + "...",
+                    "title": r.title or "N/A",
+                    "authors": r.authors or [],
+                    "year": r.year or "N/A",
+                    "doi": r.doi or "N/A",
                 }
             )
 
@@ -194,10 +191,10 @@ class RetrievelOptimizer:
         query_embedding = self.embedding_generator.batch_generate([query])[0]
 
         # Búsqueda
-        results, scores = self.vector_db.search(query_embedding, k=10)
+        results = self.vector_db.search(query_embedding, top_k=10)
 
         # Re-ranking
-        ranked_results = self.rank_search_results(query, list(zip(scores, results, [self.vector_db._metadata.get(str(r), {}) for r in results])))
+        ranked_results = self.rank_search_results(query, results)
 
         # Retornar top 5
         top_results = ranked_results[:5]
@@ -218,7 +215,7 @@ class RetrievelOptimizer:
         """Valida integridad del índice."""
         logger.info("\n✅ Validando integridad del índice...")
 
-        stats = self.vector_db.get_stats()
+        stats = dataclasses.asdict(self.vector_db.get_stats())
 
         logger.info(f"   Total chunks: {stats.get('total_chunks', 0)}")
         logger.info(f"   Dimensión embeddings: {stats.get('embedding_dimension', 0)}")

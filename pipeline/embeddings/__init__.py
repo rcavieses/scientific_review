@@ -17,7 +17,7 @@ from .models import (
     EmbeddedArticle,
 )
 
-from .information_extractor import InformationExtractor
+# from .information_extractor import InformationExtractor  # Removed: depends on scientific_search (moved to Antiguo/)
 from .text_processor import TextProcessor
 
 __version__ = "1.0.0"

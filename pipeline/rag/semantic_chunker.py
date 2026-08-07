@@ -36,7 +36,7 @@ class SemanticChunker:
     def __init__(
         self,
         embedding_generator,
-        similarity_threshold: float = 0.5,
+        similarity_threshold: float = 0.15,
         min_chunk_size: int = 300,
         max_chunk_size: int = 1000,
         verbose: bool = False,
@@ -160,7 +160,58 @@ class SemanticChunker:
                     "char_end": len(text),
                 })
 
-        return sentences
+        return self._cap_oversized_sentences(sentences)
+
+    def _cap_oversized_sentences(
+        self, sentences: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Divide en trozos de tamaño acotado cualquier "oración" patológicamente
+        larga (típico de texto de tablas mal extraído sin puntuación normal),
+        para que ninguna oración individual desborde max_chunk_size.
+        """
+        cap = self.max_chunk_size
+        result: List[Dict[str, Any]] = []
+
+        for sent in sentences:
+            text = sent["text"]
+            if len(text) <= cap:
+                sent["is_table_like"] = False
+                result.append(sent)
+                continue
+
+            # Una "oración" que por sí sola desborda max_chunk_size no es
+            # prosa normal (típicamente texto de tabla sin puntuación).
+            # Se marca is_table_like para que _create_chunks la aísle de
+            # los párrafos vecinos en vez de fusionarla con ellos.
+            start = sent["char_start"]
+            pos = 0
+            n = len(text)
+            while pos < n:
+                window_end = min(pos + cap, n)
+                cut = window_end
+                if window_end < n:
+                    last_space = text.rfind(" ", pos, window_end)
+                    if last_space > pos + int(cap * 0.5):
+                        cut = last_space
+                if cut <= pos:
+                    cut = window_end  # garantiza avance del cursor
+
+                piece = text[pos:cut].strip()
+                if piece:
+                    result.append({
+                        "text": piece,
+                        "char_start": start + pos,
+                        "char_end": start + cut,
+                        "is_table_like": True,
+                    })
+
+                # Avanzar el cursor y saltar espacios separadores
+                pos = cut
+                while pos < n and text[pos] == " ":
+                    pos += 1
+
+        return result
 
     def _find_semantic_breaks(self, embeddings: np.ndarray) -> List[int]:
         """
@@ -194,92 +245,123 @@ class SemanticChunker:
         page_map: Optional[List[Tuple[int, int, int]]],
     ) -> List[ChunkData]:
         """
-        Agrupa oraciones en chunks respetando los cortes semánticos.
+        Agrupa oraciones en chunks respetando los cortes semánticos como
+        límites preferentes, sin descartar texto.
 
-        Respeta min/max chunk size, evitando chunks muy pequeños o muy grandes.
+        Recorre las oraciones en orden acumulando un buffer. Solo cierra un
+        chunk cuando el buffer ya alcanzó min_chunk_size Y (hay un corte
+        semántico en ese punto O se alcanzó max_chunk_size). Un corte
+        semántico por sí solo NUNCA descarta contenido: si el buffer es
+        pequeño, sigue acumulando hasta el próximo corte o hasta llenar
+        max_chunk_size. Cualquier remanente final se fusiona con el chunk
+        anterior en vez de perderse.
         """
-        chunks = []
+        if not sentences:
+            return []
+
+        break_after = set(cut_indices)  # índice de oración -> hay corte tras ella
+
+        chunks: List[ChunkData] = []
+        chunk_is_table: List[bool] = []  # paralelo a chunks, no forma parte de ChunkData
         chunk_index = 0
+        buffer: List[Dict[str, Any]] = []
+        buffer_size = 0
 
-        # Definir límites de segmentos usando cut_indices
-        segment_boundaries = [0] + [i + 1 for i in cut_indices] + [len(sentences)]
-        segment_boundaries = sorted(set(segment_boundaries))
+        def flush(is_table: bool = False):
+            nonlocal buffer, buffer_size, chunk_index
+            if not buffer:
+                return
+            chunk_text = " ".join(s["text"] for s in buffer).strip()
+            char_start = buffer[0]["char_start"]
+            char_end = buffer[-1]["char_end"]
+            page_number = self._find_page(char_start, page_map) if page_map else -1
+            chunk_id = f"{paper_id}_chunk_{chunk_index:03d}"
+            chunks.append(ChunkData(
+                chunk_id=chunk_id,
+                paper_id=paper_id,
+                text=chunk_text,
+                chunk_index=chunk_index,
+                page_number=page_number,
+                char_start=char_start,
+                char_end=char_end,
+                total_chunks=0,  # se actualiza al final
+                source_pdf=source_pdf,
+            ))
+            chunk_is_table.append(is_table)
+            chunk_index += 1
+            buffer = []
+            buffer_size = 0
 
-        for seg_start, seg_end in zip(segment_boundaries[:-1], segment_boundaries[1:]):
-            segment_sentences = sentences[seg_start:seg_end]
+        buffer_is_table = False
 
-            if not segment_sentences:
-                continue
+        for i, sentence in enumerate(sentences):
+            sentence_size = len(sentence["text"])
+            is_table = sentence.get("is_table_like", False)
 
-            # Subdividir si el segmento es muy grande
-            sub_chunks = self._subdivide_segment(segment_sentences)
+            # Frontera dura: texto de tabla nunca se mezcla con prosa
+            # vecina, sin importar el tamaño del buffer. Mezclarlos diluye
+            # el embedding del chunk y entierra los datos numéricos dentro
+            # de un chunk mayormente sobre otro tema (ver _cap_oversized_sentences).
+            if buffer and is_table != buffer_is_table:
+                flush(is_table=buffer_is_table)
 
-            for chunk_sentences in sub_chunks:
-                if not chunk_sentences:
-                    continue
+            # Solo pre-cerramos el buffer si YA alcanzó min_chunk_size y
+            # agregar esta oración lo desbordaría. Si el buffer aún es
+            # pequeño, lo dejamos crecer aunque exceda max_chunk_size: es
+            # preferible un chunk algo grande a uno huérfano y diminuto
+            # (puede pasar con oraciones inusualmente largas).
+            if (
+                buffer
+                and buffer_size >= self.min_chunk_size
+                and buffer_size + sentence_size + 1 > self.max_chunk_size
+            ):
+                flush(is_table=buffer_is_table)
 
-                chunk_text = " ".join(s["text"] for s in chunk_sentences).strip()
+            buffer.append(sentence)
+            buffer_size += sentence_size + 1
+            buffer_is_table = is_table
 
-                if len(chunk_text) < self.min_chunk_size:
-                    continue
+            at_semantic_break = i in break_after
+            reached_min = buffer_size >= self.min_chunk_size
+            reached_max = buffer_size >= self.max_chunk_size
 
-                char_start = chunk_sentences[0]["char_start"]
-                char_end = chunk_sentences[-1]["char_end"]
-                page_number = self._find_page(char_start, page_map) if page_map else -1
+            if reached_max or (reached_min and at_semantic_break):
+                flush(is_table=buffer_is_table)
 
-                chunk_id = f"{paper_id}_chunk_{chunk_index:03d}"
-
+        # Remanente final: si es muy pequeño, fusionarlo con el chunk previo
+        # en vez de perderlo o dejarlo huérfano. Nunca se fusiona texto de
+        # tabla con el chunk previo si este es de otro tipo (prosa) —
+        # preferible un chunk de tabla pequeño y aislado que uno mixto.
+        if buffer:
+            prev_is_compatible = bool(chunks) and chunk_is_table[-1] == buffer_is_table
+            if chunks and buffer_size < self.min_chunk_size and prev_is_compatible:
+                prev = chunks.pop()
+                chunk_is_table.pop()
+                chunk_index -= 1
+                merged_text = (prev.text + " " + " ".join(s["text"] for s in buffer)).strip()
+                page_number = prev.page_number
+                buffer = []  # ya consumido
                 chunks.append(ChunkData(
-                    chunk_id=chunk_id,
+                    chunk_id=f"{paper_id}_chunk_{chunk_index:03d}",
                     paper_id=paper_id,
-                    text=chunk_text,
+                    text=merged_text,
                     chunk_index=chunk_index,
                     page_number=page_number,
-                    char_start=char_start,
-                    char_end=char_end,
-                    total_chunks=0,  # se actualiza abajo
+                    char_start=prev.char_start,
+                    char_end=sentences[-1]["char_end"],
+                    total_chunks=0,
                     source_pdf=source_pdf,
                 ))
+                chunk_is_table.append(buffer_is_table)
                 chunk_index += 1
+            else:
+                flush(is_table=buffer_is_table)
 
         # Actualizar total_chunks
         for chunk in chunks:
             chunk.total_chunks = len(chunks)
 
         return chunks
-
-    def _subdivide_segment(
-        self, sentences: List[Dict[str, Any]]
-    ) -> List[List[Dict[str, Any]]]:
-        """
-        Subdivide un segmento semántico si excede max_chunk_size.
-
-        Agrupa oraciones hasta alcanzar max_chunk_size.
-        """
-        if not sentences:
-            return []
-
-        sub_chunks = []
-        current_chunk = []
-        current_size = 0
-
-        for sentence in sentences:
-            sentence_size = len(sentence["text"])
-
-            # Si agregar esta oración excede el máximo, guardar chunk actual
-            if current_size + sentence_size > self.max_chunk_size and current_chunk:
-                sub_chunks.append(current_chunk)
-                current_chunk = []
-                current_size = 0
-
-            current_chunk.append(sentence)
-            current_size += sentence_size + 1  # +1 para el espacio
-
-        # Agregar último chunk
-        if current_chunk:
-            sub_chunks.append(current_chunk)
-
-        return sub_chunks
 
     @staticmethod
     def _find_page(

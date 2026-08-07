@@ -3,10 +3,16 @@
 FASE 1: Reconstrucción optimizada del índice RAG
 
 Objetivos:
-  1. Extracción completa con GROBID (fallback a pdfplumber)
-  2. Chunking semántico intelligent
+  1. Extracción con pdfplumber (incluye fix de texto rotado para tablas
+     landscape, ver PdfPlumberExtractor._extract_page_text)
+  2. Chunking semántico (SemanticChunker: cortes por cambio de tema,
+     ventana 1200-2200 chars, aislamiento de chunks de tabla vs prosa)
   3. Generación de embeddings con all-MiniLM-L6-v2
   4. Indexación FAISS con metadatos
+
+Configuración validada empíricamente comparando TextChunker vs
+SemanticChunker (varios tamaños de ventana) sobre un corpus de 30 PDFs
+con queries reales — ver conversación de la sesión para el detalle.
 
 Salida:
   - outputs/rag_index_goc_full/
@@ -20,6 +26,7 @@ Salida:
 import sys
 import json
 import logging
+import dataclasses
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
 from datetime import datetime
@@ -30,10 +37,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from pipeline.rag.rag_pipeline import RAGPipelineOrchestrator
 from pipeline.rag.semantic_chunker import SemanticChunker
-from pipeline.rag.text_chunker import TextChunker
+from pipeline.rag.pdf_extractor import PdfPlumberExtractor
 from pipeline.embeddings.embedding_generator import get_embedding_generator
-from pipeline.ocr.hybrid_provider import HybridOCRProvider
-from pipeline.ocr.grobid_provider import GrobidProvider
 
 # Configuración
 PDF_DIR = PROJECT_ROOT / "outputs" / "PDF_GOC" / "PDF"
@@ -41,12 +46,14 @@ INDEX_DIR = PROJECT_ROOT / "outputs" / "rag_index_goc_full"
 LOGS_DIR = PROJECT_ROOT / "outputs" / "logs"
 REPORTS_DIR = PROJECT_ROOT / "outputs" / "reports"
 
-# Parámetros estándar (de Fase 0)
+# Parámetros validados: SemanticChunker con ventana 1200-2200 chars fue la
+# configuración con mejores respuestas frente a TextChunker (2000 chars
+# fijos) y SemanticChunker con ventanas más chicas (300-1000) o más
+# grandes (2000-3500, que diluye el embedding al mezclar temas).
 CHUNKING_PARAMS = {
-    "chunk_size": 2000,
-    "overlap": 200,
-    "min_chunk_size": 100,
-    "split_on_paragraph": True,
+    "min_chunk_size": 1200,
+    "max_chunk_size": 2200,
+    "similarity_threshold": 0.15,
 }
 
 EMBEDDING_PARAMS = {
@@ -83,21 +90,22 @@ def create_ocr_provider():
     return grobid
 
 
-def create_chunker():
-    """Crea TextChunker con parámetros estándar."""
-    logger.info("Configurando chunker de texto...")
+def create_chunker(embedding_generator):
+    """Crea SemanticChunker (cortes por cambio de tema) con parámetros validados."""
+    logger.info("Configurando chunker semántico...")
 
-    chunker = TextChunker(
-        chunk_size=CHUNKING_PARAMS["chunk_size"],
-        overlap=CHUNKING_PARAMS["overlap"],
+    chunker = SemanticChunker(
+        embedding_generator=embedding_generator,
+        similarity_threshold=CHUNKING_PARAMS["similarity_threshold"],
         min_chunk_size=CHUNKING_PARAMS["min_chunk_size"],
-        split_on_paragraph=CHUNKING_PARAMS["split_on_paragraph"],
+        max_chunk_size=CHUNKING_PARAMS["max_chunk_size"],
         verbose=False,
     )
 
     logger.info(
-        f"  ✓ TextChunker: {CHUNKING_PARAMS['chunk_size']} chars, "
-        f"{CHUNKING_PARAMS['overlap']} chars overlap"
+        f"  ✓ SemanticChunker: {CHUNKING_PARAMS['min_chunk_size']}-"
+        f"{CHUNKING_PARAMS['max_chunk_size']} chars, "
+        f"threshold={CHUNKING_PARAMS['similarity_threshold']}"
     )
 
     return chunker
@@ -132,10 +140,19 @@ def rebuild_index():
     logger.info(f"   Tamaño total: {sum(p.stat().st_size for p in pdf_files) / 1024**2:.1f} MB")
     logger.info(f"   Directorio de índice: {INDEX_DIR}")
 
-    # Crear componentes
+    # Limpiar índice existente: phase_0 NO borra este directorio (solo
+    # limpia índices legacy), así que sin esto skip_indexed=False acumula
+    # chunks nuevos sobre los viejos en vez de reemplazarlos.
+    if INDEX_DIR.exists():
+        import shutil
+        logger.info(f"   Eliminando índice existente antes de reconstruir...")
+        shutil.rmtree(INDEX_DIR)
+
+    # Crear componentes (embeddings primero: SemanticChunker los necesita)
     logger.info(f"\n🔧 CONFIGURACIÓN:")
-    chunker = create_chunker()
     embedding_generator = create_embedding_generator()
+    chunker = create_chunker(embedding_generator)
+    extractor = PdfPlumberExtractor(verbose=True)
 
     # Crear orquestador
     logger.info("\n📦 Inicializando pipeline...")
@@ -143,6 +160,7 @@ def rebuild_index():
     orchestrator = RAGPipelineOrchestrator(
         pdf_dir=PDF_DIR,
         index_dir=INDEX_DIR,
+        extractor=extractor,
         chunker=chunker,
         embedding_generator=embedding_generator,
         skip_indexed=False,  # Procesar todos sin excepción
@@ -182,7 +200,11 @@ def save_rebuild_report(result: Dict, elapsed_time: float, pdf_count: int):
             "skipped_pdfs": result.get("skipped", 0),
             "failed_pdfs": len(result.get("failed", [])),
             "total_chunks": result.get("total_chunks", 0),
-            "index_stats": result.get("index_stats", {}),
+            "index_stats": (
+                dataclasses.asdict(result["index_stats"])
+                if dataclasses.is_dataclass(result.get("index_stats"))
+                else result.get("index_stats", {})
+            ),
         },
         "parameters": {
             "chunking": CHUNKING_PARAMS,
@@ -200,7 +222,7 @@ def save_rebuild_report(result: Dict, elapsed_time: float, pdf_count: int):
 
     report_path = REPORTS_DIR / "phase_1_rebuild_stats.json"
     with open(report_path, "w") as f:
-        json.dump(report, f, indent=2)
+        json.dump(report, f, indent=2, default=str)
 
     logger.info(f"  Reporte guardado: {report_path}")
 
@@ -220,7 +242,6 @@ def print_summary(result: Dict, elapsed_time: float, pdf_count: int, report: Dic
     logger.info(f"\n  📈 ESTADÍSTICAS:")
     logger.info(f"     PDFs procesados: {result.get('processed', 0)}/{pdf_count}")
     logger.info(f"     Chunks totales: {result.get('total_chunks', 0)}")
-    logger.info(f"     Tamaño promedio chunk: {result.get('index_stats', {}).get('avg_chunk_size', 0):.0f} chars")
 
     if result.get("failed"):
         logger.warning(f"\n  ⚠️  ERRORES:")

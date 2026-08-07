@@ -102,15 +102,15 @@ _engine = None
 _index_stats = None
 _fishbase_adapter = None
 
-def init_rag_engine(index_dir: str = "outputs/rag_index_goc"):
+def init_rag_engine(index_dir: str = "outputs/rag_index_goc_full"):
     """Inicializa el motor RAG."""
     global _db, _engine, _index_stats, _fishbase_adapter
 
     try:
         from pipeline.rag import VectorDBManager
-        from pipeline.rag.query_engine import RAGQueryEngine
+        from pipeline.rag.bm25_index import BM25IndexManager
+        from pipeline.rag.hybrid_query_engine import HybridRAGQueryEngine
         from pipeline.llm import get_llm_provider
-        from pipeline.embeddings.embedding_generator import get_embedding_generator
 
         index_path = Path(index_dir)
         config_file = index_path / "index_config.json"
@@ -121,7 +121,10 @@ def init_rag_engine(index_dir: str = "outputs/rag_index_goc"):
         with open(config_file) as f:
             config = json.load(f)
 
-        # Cargar base de datos vectorial
+        with open(index_path / "metadata_store.json", encoding="utf-8") as f:
+            metadata_store = json.load(f)
+
+        # Cargar base de datos vectorial (FAISS, semántico)
         _db = VectorDBManager(
             index_dir=index_path,
             embedding_dim=config["embedding_dimension"],
@@ -130,28 +133,52 @@ def init_rag_engine(index_dir: str = "outputs/rag_index_goc"):
         _db.load()
         _index_stats = _db.get_stats()
 
-        # Crear motor RAG
+        # Cargar índice BM25 (léxico) — ver scripts/build_bm25_index.py
+        bm25_index = BM25IndexManager(index_dir=index_path)
+        if not bm25_index.load():
+            raise FileNotFoundError(
+                f"Índice BM25 no encontrado en {index_path}. "
+                "Ejecuta: python3 scripts/build_bm25_index.py"
+            )
+
+        # Cargar sub-índice de tablas (opcional) — ver scripts/build_table_index.py
+        table_index_path = index_path / "table_index"
+        table_vector_db = None
+        table_bm25_index = None
+        if table_index_path.exists():
+            table_vector_db = VectorDBManager(
+                index_dir=table_index_path, embedding_dim=config["embedding_dimension"], verbose=False,
+            )
+            table_vector_db.load()
+            table_bm25_index = BM25IndexManager(index_dir=table_index_path)
+            table_bm25_index.load()
+            logger.info(f"Canal de tablas cargado: {table_vector_db.get_stats().total_chunks} chunks")
+        else:
+            logger.warning(
+                f"Sub-índice de tablas no encontrado en {table_index_path}. "
+                "Ejecuta: python3 scripts/build_table_index.py (opcional, mejora respuestas con datos tabulares)"
+            )
+
+        # Crear motor RAG híbrido (fusión semántico + BM25 + tablas vía RRF)
         llm_provider = get_llm_provider(
             provider="claude",
             model="claude-haiku-4-5-20251001",
             verbose=False,
         )
 
-        embedding_generator = get_embedding_generator(
-            provider="local",
-            cache_folder=str(PROJECT_ROOT / "models" / "embeddings"),
-            verbose=False,
-        )
-
-        _engine = RAGQueryEngine(
+        _engine = HybridRAGQueryEngine(
             vector_db=_db,
+            bm25_index=bm25_index,
+            metadata_store=metadata_store,
             model="claude-haiku-4-5-20251001",
-            top_k=5,
+            top_k=8,
+            candidate_k=30,
             max_tokens=1500,
-            min_score=0.2,
+            min_score=0.0,
             llm_provider=llm_provider,
-            embedding_generator=embedding_generator,
             verbose=False,
+            table_vector_db=table_vector_db,
+            table_bm25_index=table_bm25_index,
         )
 
         # Intentar cargar FishBase
@@ -277,41 +304,41 @@ async def query_rag(request: QueryRequest):
         final_answer = result.answer
         if fishbase_data:
             try:
-                # Create a prompt that enriches the response with FishBase data
-                enrichment_prompt = f"""The previous response did not contain sufficient information.
-Here is additional FishBase data for species {fishbase_species}:
+                # Crear un prompt que enriquezca la respuesta con datos de FishBase
+                enrichment_prompt = f"""La respuesta anterior no contenía información suficiente.
+Aquí hay datos adicionales de FishBase para la especie {fishbase_species}:
 
 {fishbase_data}
 
-Please enrich your previous response by integrating this FishBase data.
-Combine information from both sources (scientific papers + FishBase) in a coherent response.
-Cite FishBase when using its data."""
+Por favor, enriquece tu respuesta anterior integrando estos datos de FishBase.
+Combina información de ambas fuentes (papers científicos + FishBase) en una respuesta coherente.
+Cita FishBase cuando uses sus datos."""
 
-                enrichment_message = f"""Original question: {request.question}
+                enrichment_message = f"""Pregunta original: {request.question}
 
-FishBase data for {fishbase_species}:
+Datos de FishBase para {fishbase_species}:
 {fishbase_data}
 
-Previous response (based on scientific papers):
+Respuesta anterior (basada en papers científicos):
 {result.answer}
 
 ---
 
-Please create an IMPROVED response that integrates BOTH scientific paper data AND FishBase data.
-Clearly highlight which information comes from each source.
-Use the format: [Source: FishBase] for FishBase data and [Author et al., Year] for papers."""
+Por favor, crea una respuesta MEJORADA que integre TANTO los datos de los papers científicos COMO los datos de FishBase.
+Destaca claramente qué información viene de cada fuente.
+Usa el formato: [Fuente: FishBase] para datos de FishBase y [Autor et al., Año] para papers."""
 
                 enriched_response = _llm_provider.generate(
-                    system_prompt="You are an expert scientific assistant. Your task is to integrate information from multiple sources (scientific papers and FishBase) to provide complete and accurate answers about marine species.",
+                    system_prompt="Eres un asistente científico experto. Tu tarea es integrar información de múltiples fuentes (papers científicos y FishBase) para dar respuestas completas y precisas sobre especies marinas.",
                     user_message=enrichment_message,
                     max_tokens=1500,
                 )
 
                 if enriched_response and enriched_response.strip():
                     final_answer = enriched_response
-                    logger.info(f"✓ Response enriched with FishBase data ({fishbase_species})")
+                    logger.info(f"✓ Respuesta enriquecida con datos de FishBase ({fishbase_species})")
             except Exception as e:
-                logger.warning(f"Error enriching response with FishBase: {e}")
+                logger.warning(f"Error enriqueciendo respuesta con FishBase: {e}")
                 # Usar la respuesta original si hay error
 
         elapsed = (time.time() - start) * 1000
@@ -353,10 +380,10 @@ HTML_INTERFACE = """
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0b2545 0%, #14487a 100%);
             min-height: 100vh;
             padding: 20px;
-            color: #333;
+            color: #1a2733;
         }
         .container {
             max-width: 900px;
@@ -367,7 +394,7 @@ HTML_INTERFACE = """
             overflow: hidden;
         }
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0b2545 0%, #14487a 100%);
             color: white;
             padding: 40px 30px;
             text-align: center;
@@ -385,19 +412,19 @@ HTML_INTERFACE = """
         .search-box input {
             flex: 1;
             padding: 12px 16px;
-            border: 2px solid #e0e0e0;
+            border: 2px solid #cddbe8;
             border-radius: 8px;
             font-size: 1em;
             transition: border-color 0.3s;
         }
         .search-box input:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: #14487a;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         .search-box button {
             padding: 12px 30px;
-            background: #667eea;
+            background: #14487a;
             color: white;
             border: none;
             border-radius: 8px;
@@ -406,7 +433,7 @@ HTML_INTERFACE = """
             transition: background 0.3s;
         }
         .search-box button:hover {
-            background: #5568d3;
+            background: #0d3660;
         }
         .search-box button:disabled {
             background: #ccc;
@@ -431,8 +458,8 @@ HTML_INTERFACE = """
             to { opacity: 1; transform: translateY(0); }
         }
         .answer-box {
-            background: #f8f9fa;
-            border-left: 4px solid #667eea;
+            background: #eef4fa;
+            border-left: 4px solid #14487a;
             padding: 20px;
             border-radius: 8px;
             margin-bottom: 20px;
@@ -442,7 +469,7 @@ HTML_INTERFACE = """
             font-size: 1.4em;
             margin: 15px 0 10px 0;
             color: #333;
-            border-bottom: 2px solid #667eea;
+            border-bottom: 2px solid #14487a;
             padding-bottom: 8px;
         }
         .answer-box h3 {
@@ -465,14 +492,14 @@ HTML_INTERFACE = """
             color: #333;
         }
         .answer-box code {
-            background: #e8eaf6;
+            background: #dce9f5;
             padding: 2px 6px;
             border-radius: 3px;
             font-family: 'Courier New', monospace;
             font-size: 0.9em;
         }
         .answer-box blockquote {
-            border-left: 4px solid #764ba2;
+            border-left: 4px solid #0b2545;
             padding-left: 15px;
             margin: 10px 0;
             color: #666;
@@ -482,7 +509,7 @@ HTML_INTERFACE = """
             margin: 8px 0;
         }
         .sources-box {
-            background: #f8f9fa;
+            background: #eef4fa;
             padding: 20px;
             border-radius: 8px;
             margin-bottom: 20px;
@@ -494,13 +521,13 @@ HTML_INTERFACE = """
         .source {
             padding: 12px;
             background: white;
-            border-left: 3px solid #764ba2;
+            border-left: 3px solid #0b2545;
             margin-bottom: 10px;
             border-radius: 4px;
         }
         .source-title {
             font-weight: 600;
-            color: #667eea;
+            color: #14487a;
         }
         .source-meta {
             font-size: 0.85em;
@@ -509,7 +536,7 @@ HTML_INTERFACE = """
         }
         .source-score {
             display: inline-block;
-            background: #667eea;
+            background: #14487a;
             color: white;
             padding: 2px 8px;
             border-radius: 4px;
@@ -523,7 +550,7 @@ HTML_INTERFACE = """
         }
         .spinner {
             border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
+            border-top: 4px solid #14487a;
             border-radius: 50%;
             width: 40px;
             height: 40px;
@@ -553,7 +580,7 @@ HTML_INTERFACE = """
         }
         .time-badge {
             display: inline-block;
-            background: #2196F3;
+            background: #2c6ca8;
             color: white;
             padding: 3px 10px;
             border-radius: 20px;
@@ -573,7 +600,7 @@ HTML_INTERFACE = """
             margin-bottom: 10px;
         }
         .stats {
-            background: #f5f5f5;
+            background: #eef4fa;
             padding: 15px;
             border-radius: 8px;
             text-align: center;
@@ -583,7 +610,7 @@ HTML_INTERFACE = """
         }
         .stats span {
             font-weight: 600;
-            color: #667eea;
+            color: #14487a;
         }
     </style>
 </head>
@@ -743,7 +770,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0", help="Host del servidor")
     parser.add_argument("--port", type=int, default=8000, help="Puerto del servidor")
-    parser.add_argument("--index-dir", default="outputs/rag_index_goc", help="Directorio del índice")
+    parser.add_argument("--index-dir", default="outputs/rag_index_goc_full", help="Directorio del índice")
     parser.add_argument("--reload", action="store_true", help="Recargar código cambios")
     args = parser.parse_args()
 
