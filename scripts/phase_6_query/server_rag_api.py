@@ -91,8 +91,8 @@ def extract_doi_from_text(text: Optional[str]) -> Optional[str]:
 # ── Inicialización ──────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Scientific Review RAG API",
-    description="API para consultar papers científicos del Golfo de California con RAG + FishBase",
+    title="ATLANTIS RAG Parameter Finder API",
+    description="API para consultar parámetros de especies marinas del Golfo de California con RAG + FishBase",
     version="1.0.0"
 )
 
@@ -374,7 +374,7 @@ HTML_INTERFACE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scientific Review RAG</title>
+    <title>ATLANTIS RAG Parameter Finder</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -617,8 +617,8 @@ HTML_INTERFACE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>🐟 Scientific Review RAG</h1>
-            <p>Consulta papers científicos del Golfo de California con IA</p>
+            <h1>🌊 ATLANTIS RAG Parameter Finder</h1>
+            <p>Búsqueda de parámetros ecológicos de especies marinas del Golfo de California</p>
         </div>
 
         <div class="content">
