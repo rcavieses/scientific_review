@@ -62,6 +62,7 @@ class RAGQueryEngine:
         verbose: bool = False,
         llm_provider: Optional[LLMProvider] = None,
         client=None,
+        system_prompt: Optional[str] = None,
     ):
         self.vector_db = vector_db
         self.model = model
@@ -69,6 +70,7 @@ class RAGQueryEngine:
         self.max_tokens = max_tokens
         self.min_score = min_score
         self.verbose = verbose
+        self.system_prompt = system_prompt or _SYSTEM_PROMPT
 
         self._embedding_generator = embedding_generator
         self._llm_provider = llm_provider
@@ -171,7 +173,7 @@ class RAGQueryEngine:
 
         try:
             provider = self._get_llm_provider()
-            return provider.generate(_SYSTEM_PROMPT, user_message, self.max_tokens)
+            return provider.generate(self.system_prompt, user_message, self.max_tokens)
         except Exception as e:
             raise RuntimeError(f"Error al llamar al LLM: {e}") from e
 
