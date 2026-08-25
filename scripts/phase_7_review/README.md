@@ -42,9 +42,8 @@ búsquedas comparables (B1, B3, B4, B5, **B6**):
 | **Sin respaldo de B6** | **431** | cola de revisión, etiqueta propia |
 
 A esas se suman dos canales que no vienen de las búsquedas: las **sugerencias de
-IA** (748 celdas, inferencia taxonómica con cita) y los **registros de FishBase**
-(2 344 celdas, valores curados con su referencia primaria). Se filtran por
-separado y nunca se mezclan entre sí — ver «Los cuatro canales».
+IA** (748 celdas, inferencia taxonómica con cita) y el **reparto de esquema**
+(25 celdas). FishBase se revisa aparte, en su propia página.
 
 Dos tipos de celda entran a revisión, y se filtran por separado en la interfaz:
 
@@ -100,9 +99,9 @@ así que las cinco son compatibles y lo que parecía conflicto no lo es.
 5. **Decisión** — valor final, fuente (B1/B3/B4/B5, RAG, manual), revisor y
    comentario. Tres salidas: *Aceptar*, *Falta evidencia*, *Descartar celda*.
 
-## Los cinco canales, y por qué están separados
+## Los cuatro canales de la cola, y por qué están separados
 
-La cola mezcla celdas de cinco procedencias distintas. La interfaz las mantiene
+La cola mezcla celdas de cuatro procedencias distintas. La interfaz las mantiene
 distinguibles en todo momento —insignia propia, caja propia, descargo propio—
 porque el valor de este tablero está justamente en no confundirlas:
 
@@ -111,13 +110,9 @@ porque el valor de este tablero está justamente en no confundirlas:
 | `conflicto` | Dos o más búsquedas del corpus discrepan | Cuál de los valores es correcto |
 | `sin_respaldo` | Una búsqueda lo afirma y B6 no lo halló en el corpus | Si el valor existe en algún lado |
 | `sugerencia_ia` | **Inferencia taxonómica del modelo.** No sale de ningún registro | Que la cita sostenga la afirmación biológica |
-| `fishbase` | **Registro de una base curada.** Alguien lo midió y lo publicó | La referencia primaria, la especie y las unidades |
 | `reclasificado` | **Valor que ya existía, en la columna equivocada.** No es dato nuevo | Que la cantidad sea la que dice el reparto |
 
-La distinción entre los dos últimos es la que más fácil se pierde y la más cara
-de perder. `sugerencia_ia` es una hipótesis que dedujo el modelo; `fishbase` es
-un dato que alguien midió. Por eso la caja de IA lleva borde punteado y la de
-FishBase borde continuo: se ven distintas antes de leer una palabra.
+FishBase **no** está en esta lista: tiene página propia. Ver más abajo.
 
 ### Cómo se generan
 
@@ -222,6 +217,41 @@ machete, un blanquillo y **un pato**, intercambiándose los mismos cuatro
 números porque comparten el epíteto. Es la firma del emparejamiento difuso, y
 el script lo nombra explícitamente en cada celda afectada.
 
+## La página de FishBase
+
+FishBase vive fuera de la cola de revisión, en `#fb`. No es una separación
+cosmética: la cola sirve para **dirimir celda a celda** —qué búsqueda tiene
+razón, si el corpus lo respalda—, y con FishBase esa pregunta no aplica. Son
+2 771 valores curados y coherentes entre sí; meterlos en la cola la multiplicaba
+por tres y obligaba a revisarlos de uno en uno, que es la peor forma posible de
+mirarlos.
+
+La página los presenta como lo que son: **una tabla por grupo, una fila por
+especie y una columna por parámetro**. Así se ve de un vistazo si una especie
+está completa, si un valor desentona con sus vecinos, o si un grupo entero
+merece aceptarse de golpe.
+
+| Nivel | Cómo se acepta |
+|---|---|
+| Grupo completo | Botón «Aceptar el grupo (N)», con confirmación |
+| Una especie | Botón al final de su fila |
+| Una celda | ✓ / ✕ al pasar el cursor por encima |
+
+Cada celda muestra el valor y, en superíndice, cuántos registros lo sostienen;
+el `title` lleva el rango observado, la confianza y la referencia primaria.
+Verde es aceptada, tachada es descartada.
+
+### Lo que la aceptación por lote nunca hace
+
+**No pisa una decisión tomada en la cola de revisión.** Si una celda ya se
+resolvió allí con otra fuente —B1, B5, RAG, una referencia externa— aparece
+bloqueada (🔒), muestra el valor que se decidió **allí** y no el de FishBase, y
+no ofrece botones. La aceptación por grupo la salta y te dice cuántas saltó.
+
+Deshacer desde un botón de lote una decisión que alguien tomó mirando la
+evidencia es exactamente lo que no debe poder pasar: al escribir esto había ya
+cinco celdas así, de Ricardo y CRNT.
+
 ## Archivos
 
 | Ruta | Qué es |
@@ -254,7 +284,8 @@ El botón **Exportar CSV** fusiona las cuatro búsquedas aplicando las decisione
 | `sin_corroborar` | única búsqueda que lo reportó |
 | `sin_respaldo_b6` | otras búsquedas lo afirman, B6 no halló evidencia; el valor se conserva marcado |
 | `revisado_fuente_externa` | el revisor lo respaldó con una fuente ajena al corpus (columna `reference`) |
-| `revisado_fishbase` | el revisor aceptó el registro de FishBase |
+| `revisado_fishbase` | aceptado en la página de FishBase |
+| `fishbase_pendiente` / `fishbase_rechazado` | propuesto y sin aceptar; **la celda queda vacía** |
 | `revisado_reclasificacion` | el revisor confirmó el reparto de columna |
 | `*_pendiente` | hay una sugerencia sin revisar; **la celda queda vacía a propósito** |
 

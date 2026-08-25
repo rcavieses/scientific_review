@@ -44,7 +44,6 @@ SEARCHES = {
 EVIDENCE_SEARCH = "B6"
 EVIDENCE_CSV = DATA / "Atlantis_GOC_parametros_BUSQUEDA_6_detalle.csv"
 AI_SUGGESTIONS = OUT / "ai_suggestions.json"
-FB_SUGGESTIONS = OUT / "fishbase_suggestions.json"
 RECLASS_SUGGESTIONS = OUT / "reclass_suggestions.json"
 
 # B5 partió de una copia del CSV de B4: sus coincidencias no son evidencia
@@ -106,15 +105,6 @@ def load_ai_suggestions() -> dict[str, dict]:
     if not AI_SUGGESTIONS.exists():
         return {}
     return json.loads(AI_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
-
-
-def load_fishbase() -> dict[str, dict]:
-    """Valores copiados de FishBase: base curada, NO inferencia del modelo ni
-    extracción del corpus. Viajan por un canal propio para que el revisor
-    nunca los confunda con una hipótesis taxonómica."""
-    if not FB_SUGGESTIONS.exists():
-        return {}
-    return json.loads(FB_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
 
 
 def load_reclass() -> dict[str, dict]:
@@ -237,7 +227,6 @@ def build(tolerance: float) -> dict:
     citations = {k: [parse_citations(v) for v in df["citations"]] for k, df in frames.items()}
     evidence = load_evidence()
     ai = load_ai_suggestions()
-    fbs = load_fishbase()
     rec = load_reclass()
 
     items: list[dict] = []
@@ -260,7 +249,6 @@ def build(tolerance: float) -> dict:
             "range_b6": rng,
             "evidence_b6": evi,
             "ai_suggestion": ai.get(f"{idx}:{param}"),
-            "fb_suggestion": fbs.get(f"{idx}:{param}"),
             "reclass_suggestion": rec.get(f"{idx}:{param}"),
             # ¿Cada valor cae dentro del intervalo que la literatura reporta?
             # Es el discriminador más limpio cuando B6 trae rango.
@@ -355,31 +343,6 @@ def build(tolerance: float) -> dict:
                 items.append(item)
                 continue
 
-            if not raw and f"{idx}:{param}" in fbs:
-                # Celda vacía en las seis búsquedas, con registro en FishBase.
-                # No es inferencia: es un dato curado que aún así requiere que
-                # un humano lo acepte y confirme la referencia primaria.
-                fbg = fbs[f"{idx}:{param}"]
-                # Escala un escalón por debajo de la de `sugerencia_ia`: un valor
-                # curado con varios registros concordantes no es una alarma
-                # crítica. `critical` se reserva para lo que de verdad no debe
-                # aceptarse sin decidir algo antes — hoy, la ambigüedad de
-                # convención en Von_bertalanffy_a/b.
-                sev = {"alta": "warning", "media": "warning", "baja": "serious"}[fbg["confidence"]]
-                group_cells[group]["fishbase"] += 1
-                group_cells[group][sev] += 1
-                item = base_item(idx, param, meta, raw, rng, evi)
-                item.update({
-                    "tipo": "fishbase",
-                    "spread_pct": 0.0,
-                    "severity": sev,
-                    "tie": False,
-                    "suggested": fbg["value"],
-                    "suggested_method": f"registro de FishBase ({fbg['scope']})",
-                })
-                items.append(item)
-                continue
-
             if len(raw) < 2:
                 if len(raw) == 1:
                     group_cells[group]["sin_corroborar"] += 1
@@ -429,7 +392,6 @@ def build(tolerance: float) -> dict:
             "conflicts": counter["conflicto"],
             "unsupported": counter["sin_respaldo"],
             "ai_suggested": counter["sugerencia_ia"],
-            "fishbase": counter["fishbase"],
             "reclasificado": counter["reclasificado"],
             "critical": counter["critical"],
             "serious": counter["serious"],
@@ -459,13 +421,7 @@ def build(tolerance: float) -> dict:
             "cells_with_quote": sum(1 for item in items
                                     if (item.get("evidence_b6") or {}).get("quote")),
             "ai_suggestions": len(ai),
-            "fishbase_suggestions": len(fbs),
             "reclass_suggestions": len(rec),
-            "fishbase_contradicts": sum(
-                1 for item in items
-                if item.get("fb_suggestion") and item["values"]
-                and all(abs(v - item["fb_suggestion"]["value"]) > 0.1 * max(abs(v), 1e-9)
-                        for v in item["values"].values() if isinstance(v, (int, float)))),
             "ai_contradicts": sum(1 for item in items
                                   if item.get("ai_suggestion") and item["values"]
                                   and any(v != item["ai_suggestion"]["value"]

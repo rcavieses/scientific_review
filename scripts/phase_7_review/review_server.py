@@ -49,6 +49,7 @@ REVIEW_DIR = PROJECT_ROOT / "outputs" / "review"
 QUEUE_FILE = REVIEW_DIR / "review_queue.json"
 DECISIONS_FILE = REVIEW_DIR / "decisions.json"
 RAG_CACHE_FILE = REVIEW_DIR / "rag_evidence.json"
+FB_FILE = REVIEW_DIR / "fishbase_suggestions.json"
 EXPORT_CSV = REVIEW_DIR / "Atlantis_GOC_parametros_consolidado.csv"
 EXPORT_PROV = REVIEW_DIR / "Atlantis_GOC_procedencia.csv"
 INDEX_DIR = PROJECT_ROOT / "outputs" / "rag_index_goc_full"
@@ -527,6 +528,189 @@ def api_rag(request: RagRequest):
     return payload
 
 
+
+# ── FishBase ────────────────────────────────────────────────────────────
+# Vive aparte de la cola de revisión a propósito. La cola sirve para dirimir
+# celda a celda —qué búsqueda tiene razón, si hay respaldo en el corpus—, y eso
+# no es lo que hace falta con FishBase: son 2 671 valores curados, coherentes
+# entre sí, que se revisan mejor viendo la especie entera de un vistazo y
+# aceptando por lotes. Mezclarlos ahogaba la cola y hacía el trabajo más lento.
+
+
+def load_fb() -> dict:
+    if not FB_FILE.exists():
+        raise HTTPException(503, "Falta fishbase_suggestions.json. Ejecuta "
+                                 "scripts/phase_7_review/fishbase_suggestions.py")
+    return load_json(FB_FILE, {})
+
+
+def fb_param_meta() -> list[dict]:
+    """Orden y etiquetas de las columnas de la tabla, según el esquema del modelo."""
+    from build_review_queue import PARAMS
+    from fishbase_suggestions import PARAM_MAP
+    return [{"key": k, "label": PARAMS[k]["label"], "unit": PARAMS[k]["unit"]}
+            for k in PARAMS if k in PARAM_MAP]
+
+
+@app.get("/api/fishbase")
+def api_fishbase_index():
+    """Índice por grupo: cuántas celdas propone FishBase y cuántas van revisadas."""
+    fb = load_fb()
+    decisions = load_json(DECISIONS_FILE, {})
+    por_grupo: dict[str, dict] = {}
+    for item_id, sug in fb.get("suggestions", {}).items():
+        g = por_grupo.setdefault(sug["group"], {
+            "group": sug["group"], "cells": 0, "species": set(),
+            "accepted": 0, "rejected": 0, "pending": 0, "locked": 0,
+        })
+        g["cells"] += 1
+        g["species"].add(sug["species"])
+        d = decisions.get(item_id) or {}
+        st, src = d.get("status"), d.get("source")
+        if st in ("accepted", "rejected") and src != "FishBase":
+            # Ya se decidió en la cola de revisión, con otra fuente. Es una
+            # decisión humana sobre esa celda y FishBase no puede pisarla.
+            g["locked"] += 1
+        elif st == "accepted":
+            g["accepted"] += 1
+        elif st == "rejected":
+            g["rejected"] += 1
+        else:
+            g["pending"] += 1
+    grupos = []
+    for g in por_grupo.values():
+        g["n_species"] = len(g.pop("species"))
+        grupos.append(g)
+    grupos.sort(key=lambda x: -x["cells"])
+    return {
+        "generated_at": fb.get("generated_at"),
+        "source": fb.get("source"),
+        "warning": fb.get("warning"),
+        "params": fb_param_meta(),
+        "groups": grupos,
+        "totals": {
+            "cells": sum(g["cells"] for g in grupos),
+            "accepted": sum(g["accepted"] for g in grupos),
+            "rejected": sum(g["rejected"] for g in grupos),
+            "locked": sum(g["locked"] for g in grupos),
+            "species": sum(g["n_species"] for g in grupos),
+        },
+    }
+
+
+@app.get("/api/fishbase/group/{group:path}")
+def api_fishbase_group(group: str):
+    """La tabla de un grupo: una fila por especie, una columna por parámetro."""
+    fb = load_fb()
+    decisions = load_json(DECISIONS_FILE, {})
+    filas: dict[str, dict] = {}
+    for item_id, sug in fb.get("suggestions", {}).items():
+        if sug["group"] != group:
+            continue
+        row = item_id.split(":", 1)[0]
+        f = filas.setdefault(row, {
+            "row": int(row), "species": sug["species"],
+            "speccode": sug.get("speccode"), "cells": {},
+        })
+        d = decisions.get(item_id) or {}
+        f["cells"][sug["param"]] = {
+            "id": item_id,
+            "value": sug["value"],
+            "unit": sug.get("unit", ""),
+            "confidence": sug["confidence"],
+            "n_records": sug.get("n_records", 1),
+            "observed_range": sug.get("observed_range"),
+            "citations": sug.get("citations", []),
+            "rationale": sug.get("rationale", ""),
+            "status": d.get("status"),
+            "source": d.get("source"),
+            "locked": d.get("status") in ("accepted", "rejected") and d.get("source") != "FishBase",
+            "decided_value": d.get("value"),
+            "reviewer": d.get("reviewer", ""),
+        }
+    if not filas:
+        raise HTTPException(404, f"Sin sugerencias de FishBase para «{group}»")
+    return {
+        "group": group,
+        "params": fb_param_meta(),
+        "species": sorted(filas.values(), key=lambda f: f["species"]),
+    }
+
+
+class FBBulk(BaseModel):
+    status: str                      # accepted | rejected | pending
+    reviewer: str = ""
+    group: Optional[str] = None      # todo un grupo…
+    ids: Optional[list[str]] = None   # …o una lista concreta de celdas
+    comment: str = ""
+
+
+@app.post("/api/fishbase/decide")
+def api_fishbase_decide(body: FBBulk):
+    """Acepta, descarta o reabre celdas de FishBase, de una en una o por grupo."""
+    valid = {"accepted", "rejected", "pending"}
+    if body.status not in valid:
+        raise HTTPException(400, f"status debe ser uno de {sorted(valid)}")
+    if body.status != "pending" and not body.reviewer.strip():
+        raise HTTPException(400, "hace falta el nombre del revisor")
+    fb = load_fb().get("suggestions", {})
+
+    if body.ids:
+        objetivo = {i: fb[i] for i in body.ids if i in fb}
+    elif body.group:
+        objetivo = {i: s for i, s in fb.items() if s["group"] == body.group}
+    else:
+        raise HTTPException(400, "indica `group` o `ids`")
+    if not objetivo:
+        raise HTTPException(404, "ninguna celda coincide")
+
+    ahora = datetime.now().isoformat(timespec="seconds")
+    saltadas = []
+    with _write_lock:
+        decisions = load_json(DECISIONS_FILE, {})
+        for item_id, sug in objetivo.items():
+            # Celda ya resuelta en la cola de revisión con otra fuente. Una
+            # aceptación por lote no puede deshacer una decisión que alguien
+            # tomó mirando la evidencia: se salta y se informa.
+            previa = decisions.get(item_id) or {}
+            if (previa.get("status") in ("accepted", "rejected")
+                    and previa.get("source") != "FishBase"):
+                saltadas.append({
+                    "item_id": item_id, "species": sug["species"], "param": sug["param"],
+                    "source": previa.get("source"), "reviewer": previa.get("reviewer", ""),
+                })
+                continue
+            if body.status == "pending":
+                decisions.pop(item_id, None)
+                continue
+            previo = decisions.get(item_id)
+            history = (previo or {}).get("history", [])
+            if previo:
+                history = history + [{k: previo[k] for k in
+                                      ("status", "value", "source", "reviewer", "updated_at")
+                                      if k in previo}]
+            # La procedencia viaja con la decisión: el SpecCode y la referencia
+            # primaria son lo que hace rastreable el valor más adelante.
+            refs = [c["ref"] for c in sug.get("citations", [])]
+            decisions[item_id] = {
+                "item_id": item_id,
+                "species": sug["species"],
+                "group": sug["group"],
+                "param": sug["param"],
+                "status": body.status,
+                "value": sug["value"],
+                "source": "FishBase",
+                "reference": " | ".join(refs),
+                "reviewer": body.reviewer.strip(),
+                "comment": body.comment.strip(),
+                "updated_at": ahora,
+                "history": history[-10:],
+            }
+        save_json(DECISIONS_FILE, decisions)
+    return {"ok": True, "cells": len(objetivo) - len(saltadas), "status": body.status,
+            "skipped": len(saltadas), "skipped_detail": saltadas[:20]}
+
+
 @app.get("/api/status")
 def api_status():
     queue = get_queue()
@@ -558,6 +742,9 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
     queue = get_queue()
     decisions = load_json(DECISIONS_FILE, {})
     conflicts = {item["id"]: item for item in queue["items"]}
+    # FishBase ya no pasa por la cola: se revisa en su propia página. El export
+    # tiene que mirarlo aparte o las aceptaciones por lote no llegarían al CSV.
+    fb_sug = load_json(FB_FILE, {}).get("suggestions", {})
 
     frames = {k: pd.read_csv(PROJECT_ROOT / "data" / "output"
                              / f"Atlantis_GOC_parametros_biologicos_{v}.csv")
@@ -587,13 +774,37 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
             # tomada sobre una sugerencia (IA, FishBase o reclasificación).
             # Descartarla aquí dejaba el canal de revisión sin efecto: el
             # revisor aceptaba el valor y no aparecía nunca en el CSV.
-            if not raw and item_id not in conflicts:
+            if not raw and item_id not in conflicts and item_id not in fb_sug:
                 continue
 
             item = conflicts.get(item_id)
             decision = decisions.get(item_id)
+            fbs = fb_sug.get(item_id)
 
-            if item and decision and decision["status"] == "accepted":
+            if fbs and decision and decision["status"] == "accepted" \
+                    and decision.get("source") == "FishBase":
+                # Celda aceptada en la página de FishBase, fuera de la cola.
+                value = norm_num(decision["value"]) if kind == "num" else decision["value"]
+                status = "revisado_fishbase"
+                marca = f"FishBase SpecCode {fbs.get('speccode')}"
+                if fbs.get("n_records", 0) > 1:
+                    marca += f", mediana de {fbs['n_records']} registros"
+                refs = [c["ref"] for c in fbs.get("citations", [])]
+                note = " · ".join(x for x in (decision.get("comment", ""), marca,
+                                              "cita: " + " | ".join(refs) if refs else "") if x)
+            elif fbs and not raw and not (decision and decision["status"] == "accepted"):
+                # Propuesta de FishBase sin aceptar: no se escribe valor.
+                provenance.append({
+                    "row": idx, "Species": base.at[idx, "Species"], "Group": base.at[idx, "Group"],
+                    "param": param, "value": None,
+                    "status": "fishbase_rechazado" if (decision or {}).get("status") == "rejected"
+                              else "fishbase_pendiente",
+                    "n_searches": 0, "spread_pct": 0.0, "searches": "",
+                    "reviewer": (decision or {}).get("reviewer", ""),
+                    "note": f"propuesto: {fbs['value']} · FishBase SpecCode {fbs.get('speccode')}",
+                })
+                continue
+            elif item and decision and decision["status"] == "accepted":
                 value = decision["value"]
                 status = {"externo": "revisado_fuente_externa",
                           "IA": "revisado_sugerencia_ia",

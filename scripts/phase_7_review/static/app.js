@@ -20,6 +20,9 @@ const state = {
   filters: { param: '', sev: new Set(), status: new Set(), q: '', onlyCritical: false,
              tipo: 'conflicto' },
   open: new Set(),
+  fb: null,                // índice de grupos de FishBase
+  fbGroup: null,           // tabla del grupo abierto
+  fbBusy: false,
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -192,7 +195,6 @@ function renderHome() {
     kpi((t.by_tipo || {}).conflicto || 0, 'Discrepan', 'dos o más búsquedas, valores distintos'),
     kpi((t.by_tipo || {}).sin_respaldo || 0, 'Sin respaldo', 'B6 no halló evidencia en el corpus'),
     kpi((t.by_tipo || {}).sugerencia_ia || 0, 'Sugerencias IA', `${t.ai_contradicts || 0} contradicen a las búsquedas`),
-    kpi((t.by_tipo || {}).fishbase || 0, 'De FishBase', 'valores curados con su referencia primaria'),
     kpi(t.cells_with_quote || 0, 'Con cita textual', 'respaldadas por B6 con fragmento verbatim'),
     conflictKpi(t, reviewed, pct),
     kpi(flagged, 'Marcadas', 'requieren más evidencia'),
@@ -209,7 +211,10 @@ function renderHome() {
     el('h2', {}, 'Grupos con celdas por revisar ', el('span', {}, `(${groups.length} de ${q.groups.length})`),
       el('button', { class: 'ghost', style: 'float:right;font-size:13px',
                      onclick: () => go({ view: 'group', group: '__all__' }) },
-        'Ver la cola completa →')),
+        'Ver la cola completa →'),
+      el('button', { class: 'ghost', style: 'float:right;font-size:13px;margin-right:8px',
+                     onclick: () => go({ view: 'fb', group: null }) },
+        'Parámetros de FishBase →')),
     el('div', { class: 'cards' }, groups.map(groupCard)),
     quiet.length ? el('h2', {}, 'Sin celdas por revisar ', el('span', {}, `(${quiet.length} grupos)`)) : null,
     quiet.length ? el('div', { class: 'cards' }, quiet.map(groupCard)) : null,
@@ -233,7 +238,7 @@ function conflictKpi(t, reviewed, pct) {
 // cuentan: son la mayor parte de la cola y también piden decisión humana.
 // Omitirlas hacía que un grupo lleno de sugerencias se mostrara como vacío.
 function groupLoad(g) {
-  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0) + (g.fishbase || 0) + (g.reclasificado || 0);
+  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0) + (g.reclasificado || 0);
 }
 
 function groupCard(g) {
@@ -258,7 +263,6 @@ function groupCard(g) {
       el('span', {}, `${g.conflicts || 0} discrepan`),
       el('span', {}, `${g.unsupported || 0} sin respaldo`),
       g.ai_suggested ? el('span', {}, `${g.ai_suggested} sugerencias`) : null,
-      g.fishbase ? el('span', {}, `${g.fishbase} FishBase`) : null,
       g.reclasificado ? el('span', {}, `${g.reclasificado} reclasificadas`) : null),
     total ? bar : null,
     el('div', { class: 'meta' },
@@ -363,7 +367,6 @@ function filtersBar(all) {
     ['conflicto', 'Discrepan'],
     ['sin_respaldo', 'Sin respaldo de B6'],
     ['sugerencia_ia', 'Sugerencia IA'],
-    ['fishbase', 'FishBase'],
     ['reclasificado', 'Reclasificadas'],
   ].map(([key, label]) => {
     const n = all.filter((i) => (i.tipo || 'conflicto') === key).length;
@@ -373,8 +376,6 @@ function filtersBar(all) {
         ? 'Otra búsqueda afirma un valor que la corrida con evidencia (B6) no encontró en el corpus'
         : (key === 'sugerencia_ia'
             ? 'Inferencia taxonómica del modelo, sin respaldo documental: hipótesis a validar'
-            : key === 'fishbase'
-            ? 'Valor copiado de FishBase, base curada, con la referencia primaria del registro'
             : key === 'reclasificado'
             ? 'Valor que ya existía, repartido desde Von_bertalanffy_a/b a la columna que le corresponde'
             : 'Dos o más búsquedas dan valores distintos'),
@@ -429,8 +430,6 @@ function conflictCard(item) {
         ? el('span', { class: 'badge ia', title: 'Inferencia taxonómica, sin respaldo documental' }, 'sugerencia IA')
         : item.tipo === 'reclasificado'
         ? el('span', { class: 'badge rc', title: 'Valor existente, movido a su columna real' }, 'reclasificada')
-        : item.tipo === 'fishbase'
-        ? el('span', { class: 'badge fb', title: 'Valor curado de FishBase, con referencia primaria' }, 'FishBase')
         : item.tipo === 'sin_respaldo'
         ? el('span', { class: 'badge crit', title: 'B6 no encontró evidencia en el corpus' }, 'sin respaldo')
         : (item.kind === 'num'
@@ -524,36 +523,6 @@ function cardBody(item) {
           + 'búsqueda la resolvió a su manera. Confirma que la cantidad es la que dice.'),
         el('button', { class: 'chip', style: 'margin-top:10px',
           onclick: () => fillDecision(item.id, rc.value, 'reclasificado') }, 'Usar este valor')));
-  }
-
-  // ── registro de FishBase ─────────────────────────────────────────────
-  // Deliberadamente separado de la sugerencia de IA y con otro descargo: una
-  // no es la otra. La de arriba es una hipótesis que dedujo el modelo; ésta es
-  // un dato que alguien midió, publicó y FishBase catalogó. Presentarlas con
-  // el mismo texto borraría la única distinción que importa al revisar.
-  const fb = item.fb_suggestion;
-  if (fb) {
-    const rango = fb.observed_range;
-    body.append(
-      el('h4', {}, 'Registro de FishBase ',
-        el('span', { class: `conf conf-${fb.confidence}` }, `confianza ${fb.confidence}`)),
-      el('div', { class: 'fb-box' },
-        el('div', {}, el('b', {}, fmt(fb.value, item.kind)),
-          fb.unit && fb.unit !== '—' ? el('span', { class: 'hint' }, ` ${fb.unit}`) : null,
-          el('span', { class: 'hint' }, ` · ${fb.scope}`)),
-        el('div', { class: 'paper-grid', style: 'margin-top:8px' },
-          el('span', { class: 'pk' }, 'Registros'), el('span', { class: 'pv' }, fb.n_records),
-          el('span', { class: 'pk' }, 'Rango observado'),
-          el('span', { class: 'pv' }, rango ? `${rango[0]} – ${rango[1]} ${fb.unit || ''}` : 'un solo registro')),
-        el('p', { style: 'margin:8px 0 0;font-size:13px;line-height:1.55' }, fb.rationale),
-        citasIA(fb.citations),
-        el('div', { class: 'hint', style: 'margin-top:10px' },
-          'Valor copiado de una base curada: ', el('b', {}, 'ni inferencia del modelo ni extracción del corpus'),
-          '. Lo que hay que ir a comprobar es la referencia primaria; FishBase es el '
-          + 'intermediario, no la evidencia. Confirma también que la especie de FishBase '
-          + 'es la misma del modelo y que las unidades coinciden con las de tu columna.'),
-        el('button', { class: 'chip', style: 'margin-top:10px',
-          onclick: () => fillDecision(item.id, fb.value, 'FishBase') }, 'Usar el valor de FishBase')));
   }
 
   const ev = item.evidence_b6;
@@ -916,14 +885,20 @@ async function exportCsv() {
 function go(route) {
   state.route = route;
   state.open.clear();
-  location.hash = route.view === 'group' ? `#g=${encodeURIComponent(route.group)}` : '';
+  location.hash = route.view === 'group' ? `#g=${encodeURIComponent(route.group)}`
+    : route.view === 'fbGroup' ? `#fb=${encodeURIComponent(route.group)}`
+    : route.view === 'fb' ? '#fb' : '';
   render();
   window.scrollTo(0, 0);
 }
 
 function readHash() {
-  const m = location.hash.match(/^#g=(.*)$/);
-  state.route = m ? { view: 'group', group: decodeURIComponent(m[1]) } : { view: 'home', group: null };
+  const g = location.hash.match(/^#g=(.*)$/);
+  const f = location.hash.match(/^#fb=(.*)$/);
+  if (f) state.route = { view: 'fbGroup', group: decodeURIComponent(f[1]) };
+  else if (location.hash === '#fb') state.route = { view: 'fb', group: null };
+  else if (g) state.route = { view: 'group', group: decodeURIComponent(g[1]) };
+  else state.route = { view: 'home', group: null };
 }
 
 function render() {
@@ -931,7 +906,10 @@ function render() {
   const t = state.queue.totals;
   $('#subtitle').textContent =
     `${t.conflicts} celdas en conflicto · ${t.species} especies · ${state.queue.searches.join('/')} · cola del ${state.queue.generated_at.slice(0, 10)}`;
-  if (state.route.view === 'group') renderGroup(); else renderHome();
+  if (state.route.view === 'fb') renderFishbase();
+  else if (state.route.view === 'fbGroup') renderFishbaseGroup();
+  else if (state.route.view === 'group') renderGroup();
+  else renderHome();
 }
 
 // ── arranque ───────────────────────────────────────────────────────────
@@ -966,4 +944,199 @@ function citasIA(citations) {
       el('div', { class: 'cita-ref' }, c.ref),
       c.url ? el('a', { class: 'cita-url', href: c.url, target: '_blank', rel: 'noopener' }, c.url) : null,
       el('div', { class: 'cita-sostiene' }, 'sostiene: ', c.supports))));
+}
+
+// ── página de FishBase ─────────────────────────────────────────────────
+// Separada de la cola de revisión. La cola dirime celda a celda —qué búsqueda
+// tiene razón, si el corpus lo respalda—, y con FishBase esa pregunta no
+// aplica: son valores curados y coherentes entre sí. Lo que hace falta aquí es
+// ver la especie completa de un vistazo y decidir por lotes.
+
+async function loadFishbase() {
+  const r = await fetch('/api/fishbase');
+  if (!r.ok) { toast('No se pudo cargar FishBase'); return; }
+  state.fb = await r.json();
+}
+
+async function renderFishbase() {
+  if (!state.fb) { await loadFishbase(); if (!state.fb) return; }
+  const f = state.fb;
+  const t = f.totals;
+  const pct = t.cells ? Math.round(t.accepted / t.cells * 100) : 0;
+
+  const cabecera = el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:16px' },
+    el('button', { class: 'ghost', onclick: () => go({ view: 'home' }) }, '← Revisión'),
+    el('h2', { style: 'margin:0;font-size:18px' }, 'Parámetros de FishBase'),
+    el('span', { class: 'hint' }, `${t.accepted} de ${t.cells} celdas aceptadas · ${pct}%`));
+
+  const kpis = el('div', { class: 'kpis' },
+    kpi(t.cells, 'Celdas propuestas', `${f.groups.length} grupos · ${t.species} especies`),
+    kpi(t.accepted, 'Aceptadas', 'ya son dato al exportar'),
+    kpi(t.rejected, 'Descartadas', 'no se escriben en el CSV'),
+    kpi(t.cells - t.accepted - t.rejected - (t.locked || 0), 'Sin revisar', 'la celda queda vacía'),
+    t.locked ? kpi(t.locked, 'Decididas en la cola',
+                   'ya resueltas con otra fuente · FishBase no las toca') : null);
+
+  const filas = f.groups.map((g) => {
+    const revisado = g.accepted + g.rejected + (g.locked || 0);
+    return el('tr', {},
+      el('td', {}, el('b', {}, g.group)),
+      el('td', { class: 'num' }, g.n_species),
+      el('td', { class: 'num' }, g.cells),
+      el('td', { class: 'num' }, g.accepted ? el('span', { class: 'badge done' }, g.accepted) : '—'),
+      el('td', { class: 'num' }, g.rejected || '—'),
+      el('td', { class: 'num' }, g.locked
+        ? el('span', { class: 'badge', title: 'Resueltas en la cola de revisión con otra fuente' }, g.locked)
+        : '—'),
+      el('td', {},
+        el('div', { class: 'progress', style: 'margin:0' },
+          el('i', { style: `width:${g.cells ? Math.round(revisado / g.cells * 100) : 0}%` }))),
+      el('td', {}, el('button', { class: 'chip',
+        onclick: () => go({ view: 'fbGroup', group: g.group }) }, 'Ver tabla →')));
+  });
+
+  $('#view').replaceChildren(
+    cabecera,
+    kpis,
+    el('div', { class: 'warn-note', style: 'margin:16px 0' },
+      el('b', {}, 'Estos valores no salen del corpus ni los dedujo el modelo. '),
+      f.warning || ''),
+    el('div', { class: 'tablewrap' },
+      el('table', { class: 'fbtable' },
+        el('thead', {}, el('tr', {},
+          el('th', {}, 'Grupo'), el('th', { class: 'num' }, 'Especies'),
+          el('th', { class: 'num' }, 'Celdas'), el('th', { class: 'num' }, 'Aceptadas'),
+          el('th', { class: 'num' }, 'Descartadas'),
+          el('th', { class: 'num' }, 'En la cola'),
+          el('th', {}, 'Avance'), el('th', {}, ''))),
+        el('tbody', {}, filas))),
+    el('p', { class: 'hint', style: 'margin-top:14px' },
+      `Fuente: ${f.source || 'FishBase'} · generado el ${(f.generated_at || '').slice(0, 10)}`));
+}
+
+async function renderFishbaseGroup() {
+  const group = state.route.group;
+  if (!state.fbGroup || state.fbGroup.group !== group) {
+    const r = await fetch(`/api/fishbase/group/${encodeURIComponent(group)}`);
+    if (!r.ok) { toast('Ese grupo no tiene sugerencias de FishBase'); go({ view: 'fb' }); return; }
+    state.fbGroup = await r.json();
+  }
+  const d = state.fbGroup;
+  const celdas = d.species.flatMap((sp) => Object.values(sp.cells));
+  const bloqueadas = celdas.filter((c) => c.locked).length;
+  const aceptadas = celdas.filter((c) => c.status === 'accepted' && !c.locked).length;
+  const descartadas = celdas.filter((c) => c.status === 'rejected' && !c.locked).length;
+  const pendientes = celdas.length - aceptadas - descartadas - bloqueadas;
+
+  const cabecera = el('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px' },
+    el('button', { class: 'ghost', onclick: () => go({ view: 'fb' }) }, '← FishBase'),
+    el('h2', { style: 'margin:0;font-size:18px' }, group),
+    el('span', { class: 'hint' },
+      `${d.species.length} especies · ${celdas.length} celdas · ${aceptadas} aceptadas`
+      + (bloqueadas ? ` · ${bloqueadas} ya resueltas en la cola` : '')),
+    el('div', { class: 'spacer', style: 'flex:1' }),
+    el('button', {
+      class: 'primary', disabled: state.fbBusy || !pendientes,
+      onclick: () => decidirFB({ group }, 'accepted',
+        `¿Aceptar las ${pendientes} celdas sin revisar de «${group}»?\n\n`
+        + 'Se escribirán en el CSV al exportar, cada una con su SpecCode y su '
+        + 'referencia primaria. Puedes revertirlo célula a célula después.'
+        + (bloqueadas ? `\n\nLas ${bloqueadas} celdas ya resueltas en la cola de revisión `
+           + 'no se tocan.' : '')),
+    }, `Aceptar el grupo (${pendientes})`),
+    el('button', {
+      class: 'ghost', disabled: state.fbBusy || !(aceptadas + descartadas),
+      onclick: () => decidirFB({ group }, 'pending',
+        `¿Reabrir las ${aceptadas + descartadas} celdas ya revisadas de «${group}»?`),
+    }, 'Reabrir el grupo'));
+
+  const encabezados = [el('th', {}, 'Especie')]
+    .concat(d.params.map((p) => el('th', { class: 'num' },
+      p.label, p.unit ? el('small', {}, ` (${p.unit})`) : null)))
+    .concat([el('th', {}, '')]);
+
+  const filas = d.species.map((sp) => {
+    const suyas = Object.values(sp.cells);
+    const pend = suyas.filter((c) => !c.status && !c.locked).length;
+    return el('tr', {},
+      el('td', { class: 'sp' }, sp.species,
+        sp.speccode ? el('div', { class: 'fam' }, `SpecCode ${sp.speccode}`) : null),
+      ...d.params.map((p) => celdaFB(sp.cells[p.key])),
+      el('td', {}, el('button', {
+        class: 'chip', disabled: state.fbBusy || !pend,
+        onclick: () => decidirFB({ ids: suyas.filter((c) => !c.status && !c.locked).map((c) => c.id) },
+          'accepted', null),
+      }, pend ? `Aceptar ${pend}` : '✓')));
+  });
+
+  $('#view').replaceChildren(
+    cabecera,
+    el('div', { class: 'tablewrap' },
+      el('table', { class: 'fbtable fbparams' },
+        el('thead', {}, el('tr', {}, ...encabezados)),
+        el('tbody', {}, filas))),
+    el('p', { class: 'hint', style: 'margin-top:14px' },
+      'Cada celda muestra el valor propuesto. Si viene de varios registros, el '
+      + 'número pequeño es cuántos: pasa el cursor para ver el rango observado y '
+      + 'la referencia primaria. Verde = aceptada; tachada = descartada.'));
+}
+
+// Una celda de la tabla: valor, cuántos registros lo sostienen y su estado.
+function celdaFB(c) {
+  if (!c) return el('td', { class: 'num vacia' }, '—');
+  if (c.locked) {
+    // Resuelta en la cola con otra fuente. Se muestra lo que se decidió allí,
+    // no lo que propone FishBase, y no se ofrece ningún botón: deshacer una
+    // decisión humana desde aquí sería justo lo que no debe poder hacerse.
+    return el('td', { class: 'num lock',
+      title: `Resuelta en la cola de revisión por ${c.reviewer || '—'} `
+           + `(fuente ${c.source}). FishBase proponía ${c.value}${c.unit ? ' ' + c.unit : ''}.` },
+      el('span', {}, fmt(c.decided_value, 'num')), el('span', { class: 'lockicon' }, '🔒'));
+  }
+  const clase = `num${c.status === 'accepted' ? ' ok' : c.status === 'rejected' ? ' no' : ''}`;
+  const detalle = [
+    `${c.value}${c.unit ? ' ' + c.unit : ''}`,
+    c.observed_range ? `rango observado: ${c.observed_range[0]} – ${c.observed_range[1]}` : null,
+    `${c.n_records} registro(s) · confianza ${c.confidence}`,
+    ...(c.citations || []).map((x) => x.ref),
+  ].filter(Boolean).join('\n');
+  return el('td', { class: clase, title: detalle },
+    el('span', { class: `fbval conf-${c.confidence}` }, fmt(c.value, 'num')),
+    c.n_records > 1 ? el('sup', { class: 'nrec' }, c.n_records) : null,
+    el('div', { class: 'cellbtns' },
+      el('button', {
+        class: 'mini', title: 'Aceptar esta celda', disabled: state.fbBusy,
+        onclick: (e) => { e.stopPropagation(); decidirFB({ ids: [c.id] }, 'accepted', null); },
+      }, '✓'),
+      el('button', {
+        class: 'mini', title: 'Descartar esta celda', disabled: state.fbBusy,
+        onclick: (e) => { e.stopPropagation(); decidirFB({ ids: [c.id] }, 'rejected', null); },
+      }, '✕')));
+}
+
+async function decidirFB(objetivo, status, confirmacion) {
+  const reviewer = $('#reviewer').value.trim();
+  if (status !== 'pending' && !reviewer) {
+    toast('Escribe tu nombre de revisor arriba'); $('#reviewer').focus(); return;
+  }
+  if (confirmacion && !window.confirm(confirmacion)) return;
+  state.fbBusy = true;
+  try {
+    const r = await fetch('/api/fishbase/decide', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...objetivo, status, reviewer }),
+    });
+    if (!r.ok) { toast('No se pudo guardar'); return; }
+    const res = await r.json();
+    const verbo = status === 'accepted' ? 'aceptadas'
+                : status === 'rejected' ? 'descartadas' : 'reabiertas';
+    toast(`${res.cells} celda(s) ${verbo}`
+          + (res.skipped ? ` · ${res.skipped} intactas (ya resueltas en la cola)` : ''));
+    localStorage.setItem('reviewer', reviewer);
+    state.fb = null;            // los contadores del índice cambiaron
+    state.fbGroup = null;       // y la tabla también
+  } finally {
+    state.fbBusy = false;
+  }
+  render();
 }
