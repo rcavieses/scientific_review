@@ -197,10 +197,9 @@ function renderHome() {
     kpi(flagged, 'Marcadas', 'requieren más evidencia'),
   );
 
-  const load = (g) => (g.conflicts || 0) + (g.unsupported || 0);
-  const groups = q.groups.filter((g) => load(g) > 0)
-    .sort((a, b) => b.critical - a.critical || load(b) - load(a));
-  const quiet = q.groups.filter((g) => load(g) === 0);
+  const groups = q.groups.filter((g) => groupLoad(g) > 0)
+    .sort((a, b) => b.critical - a.critical || groupLoad(b) - groupLoad(a));
+  const quiet = q.groups.filter((g) => groupLoad(g) === 0);
 
   // replaceChildren convierte null en el texto "null": hay que filtrarlo.
   const show = (...nodes) => $('#view').replaceChildren(...nodes.filter(Boolean));
@@ -229,9 +228,16 @@ function conflictKpi(t, reviewed, pct) {
   return node;
 }
 
+// Celdas que este grupo pone en la cola de revisión. Las sugerencias de IA
+// cuentan: son la mayor parte de la cola y también piden decisión humana.
+// Omitirlas hacía que un grupo lleno de sugerencias se mostrara como vacío.
+function groupLoad(g) {
+  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0);
+}
+
 function groupCard(g) {
   const done = state.queue.items.filter((i) => i.group === g.group && isDecided(i.id)).length;
-  const total = (g.conflicts || 0) + (g.unsupported || 0);
+  const total = groupLoad(g);
   const pending = total - done;
   // Composición por severidad de la cola del grupo (bruta) + lo ya revisado.
   const bar = el('div', { class: 'sevbar' });
@@ -245,11 +251,12 @@ function groupCard(g) {
   },
     el('span', { class: 'code' }, g.code || '—'),
     el('div', { class: 'name' }, g.group),
-    el('div', { class: 'big' }, (g.conflicts || 0) + (g.unsupported || 0),
+    el('div', { class: 'big' }, total,
       el('small', {}, 'celdas por revisar')),
     el('div', { class: 'meta' },
       el('span', {}, `${g.conflicts || 0} discrepan`),
-      el('span', {}, `${g.unsupported || 0} sin respaldo`)),
+      el('span', {}, `${g.unsupported || 0} sin respaldo`),
+      g.ai_suggested ? el('span', {}, `${g.ai_suggested} sugerencias`) : null),
     total ? bar : null,
     el('div', { class: 'meta' },
       el('span', {}, `${g.n_species} especies`),
