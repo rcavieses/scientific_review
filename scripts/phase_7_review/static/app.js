@@ -954,12 +954,41 @@ function citasIA(citations) {
 
 async function loadFishbase() {
   const r = await fetch('/api/fishbase');
-  if (!r.ok) { toast('No se pudo cargar FishBase'); return; }
+  if (!r.ok) {
+    // 404 aquí casi siempre significa lo mismo: el proceso del servidor lleva
+    // días arrancado y no tiene estas rutas. Los estáticos sí se releen del
+    // disco, así que se ve el botón nuevo contra una API vieja. Decirlo ahorra
+    // buscar el fallo en el sitio equivocado.
+    fbError = r.status === 404
+      ? 'El servidor no conoce /api/fishbase. Reinícialo para que cargue las rutas nuevas:\n'
+        + '  ./scripts/phase_7_review/run_review.sh 8600'
+      : `El servidor respondió ${r.status} al pedir /api/fishbase.`;
+    return;
+  }
+  fbError = null;
   state.fb = await r.json();
 }
 
+let fbError = null;
+
+// Un fallo de carga tiene que verse en la página, no sólo en un aviso que se
+// desvanece: si no, el síntoma es «no pasa nada al pulsar» y no se sabe dónde
+// mirar.
+function fbErrorView(volverA) {
+  return el('div', {},
+    el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:16px' },
+      el('button', { class: 'ghost', onclick: () => go(volverA) }, '← Volver'),
+      el('h2', { style: 'margin:0;font-size:18px' }, 'No se pudo cargar FishBase')),
+    el('div', { class: 'warn-note' },
+      el('b', {}, 'La página no está disponible en este servidor. '),
+      el('pre', { style: 'white-space:pre-wrap;margin:8px 0 0;font-size:12px' }, fbError)));
+}
+
 async function renderFishbase() {
-  if (!state.fb) { await loadFishbase(); if (!state.fb) return; }
+  if (!state.fb) {
+    await loadFishbase();
+    if (!state.fb) { $('#view').replaceChildren(fbErrorView({ view: 'home' })); return; }
+  }
   const f = state.fb;
   const t = f.totals;
   const pct = t.cells ? Math.round(t.accepted / t.cells * 100) : 0;
@@ -1018,7 +1047,13 @@ async function renderFishbaseGroup() {
   const group = state.route.group;
   if (!state.fbGroup || state.fbGroup.group !== group) {
     const r = await fetch(`/api/fishbase/group/${encodeURIComponent(group)}`);
-    if (!r.ok) { toast('Ese grupo no tiene sugerencias de FishBase'); go({ view: 'fb' }); return; }
+    if (!r.ok) {
+      if (r.status === 404 && state.fb) { toast('Ese grupo no tiene sugerencias de FishBase'); go({ view: 'fb' }); return; }
+      fbError = `El servidor respondió ${r.status} al pedir la tabla de «${group}».`
+        + (r.status === 404 ? ' Si acabas de actualizar el código, reinicia el servidor.' : '');
+      $('#view').replaceChildren(fbErrorView({ view: 'fb', group: null }));
+      return;
+    }
     state.fbGroup = await r.json();
   }
   const d = state.fbGroup;
