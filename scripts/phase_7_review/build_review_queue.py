@@ -45,6 +45,7 @@ EVIDENCE_SEARCH = "B6"
 EVIDENCE_CSV = DATA / "Atlantis_GOC_parametros_BUSQUEDA_6_detalle.csv"
 AI_SUGGESTIONS = OUT / "ai_suggestions.json"
 FB_SUGGESTIONS = OUT / "fishbase_suggestions.json"
+RECLASS_SUGGESTIONS = OUT / "reclass_suggestions.json"
 
 # B5 partió de una copia del CSV de B4: sus coincidencias no son evidencia
 # independiente. Se marca para poder ponderar el consenso honestamente.
@@ -59,8 +60,15 @@ PARAMS = {
     "max_age":             {"label": "Edad máxima",             "unit": "años",     "type": "num"},
     "natural_mortality":   {"label": "Mortalidad natural (M)",  "unit": "1/año",    "type": "num"},
     "Lmax":                {"label": "Longitud máxima",         "unit": "cm",       "type": "num"},
-    "Von_bertalanffy_a":   {"label": "Von Bertalanffy a (L∞)",  "unit": "cm",       "type": "num"},
-    "Von_bertalanffy_b":   {"label": "Von Bertalanffy b (K)",   "unit": "1/año",    "type": "num"},
+    # Sustituyen a Von_bertalanffy_a/b, que mezclaban cuatro cantidades bajo dos
+    # nombres. La causa fue la definición que recibió el extractor —«Von
+    # Bertalanffy coefficient a», que no existe: la ecuación tiene L∞, K y t0—,
+    # así que cada corrida la resolvió a su manera. K vive sólo en growth_rate:
+    # darle dos casas fue parte del enredo original.
+    "li_a":                {"label": "Peso-talla a (li_a)",     "unit": "",         "type": "num"},
+    "li_b":                {"label": "Peso-talla b (li_b)",     "unit": "",         "type": "num"},
+    "vb_Linf":             {"label": "Talla asintótica (L∞)",   "unit": "cm",       "type": "num"},
+    "vb_t0":               {"label": "Edad a talla cero (t₀)",  "unit": "años",     "type": "num"},
     "growth_rate":         {"label": "Tasa de crecimiento",     "unit": "1/año",    "type": "num"},
     "age_first_maturity":  {"label": "Edad 1ª madurez",         "unit": "años",     "type": "num"},
     "larval_duration":     {"label": "Duración larval",         "unit": "días",     "type": "num"},
@@ -107,6 +115,15 @@ def load_fishbase() -> dict[str, dict]:
     if not FB_SUGGESTIONS.exists():
         return {}
     return json.loads(FB_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
+
+
+def load_reclass() -> dict[str, dict]:
+    """Valores repartidos desde Von_bertalanffy_a/b hacia el esquema nuevo.
+    No son medición nueva: son los mismos números, leídos en la columna que les
+    corresponde. Aun así pasan por revisión, porque el reparto es una lectura."""
+    if not RECLASS_SUGGESTIONS.exists():
+        return {}
+    return json.loads(RECLASS_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
 
 
 def load_searches() -> dict[str, pd.DataFrame]:
@@ -221,6 +238,7 @@ def build(tolerance: float) -> dict:
     evidence = load_evidence()
     ai = load_ai_suggestions()
     fbs = load_fishbase()
+    rec = load_reclass()
 
     items: list[dict] = []
     group_cells: defaultdict[str, Counter] = defaultdict(Counter)
@@ -243,6 +261,7 @@ def build(tolerance: float) -> dict:
             "evidence_b6": evi,
             "ai_suggestion": ai.get(f"{idx}:{param}"),
             "fb_suggestion": fbs.get(f"{idx}:{param}"),
+            "reclass_suggestion": rec.get(f"{idx}:{param}"),
             # ¿Cada valor cae dentro del intervalo que la literatura reporta?
             # Es el discriminador más limpio cuando B6 trae rango.
             "inside_range": ({k: (rng[0] <= v <= rng[1]) for k, v in raw.items()}
@@ -256,6 +275,10 @@ def build(tolerance: float) -> dict:
             kind = meta["type"]
             raw = {}
             for key, df in frames.items():
+                # Las columnas nuevas del esquema todavía no existen en los CSV
+                # de las búsquedas: ausente no es lo mismo que vacío.
+                if param not in df.columns:
+                    continue
                 value = norm_num(df.at[idx, param]) if kind == "num" else norm_cat(df.at[idx, param])
                 if value is not None:
                     raw[key] = value
@@ -308,6 +331,26 @@ def build(tolerance: float) -> dict:
                     "tie": False,
                     "suggested": sug["value"],
                     "suggested_method": f"inferencia taxonómica ({sug['scope']})",
+                })
+                items.append(item)
+                continue
+
+            if not raw and f"{idx}:{param}" in rec:
+                # Valor que ya existía en el CSV, sólo que en la columna
+                # equivocada. Se propone en su columna real y se revisa: es un
+                # reparto por magnitud, no una medición.
+                rcg = rec[f"{idx}:{param}"]
+                sev = {"alta": "warning", "media": "serious", "baja": "critical"}[rcg["confidence"]]
+                group_cells[group]["reclasificado"] += 1
+                group_cells[group][sev] += 1
+                item = base_item(idx, param, meta, raw, rng, evi)
+                item.update({
+                    "tipo": "reclasificado",
+                    "spread_pct": 0.0,
+                    "severity": sev,
+                    "tie": False,
+                    "suggested": rcg["value"],
+                    "suggested_method": f"reparto de esquema ({rcg['scope']})",
                 })
                 items.append(item)
                 continue
@@ -387,6 +430,7 @@ def build(tolerance: float) -> dict:
             "unsupported": counter["sin_respaldo"],
             "ai_suggested": counter["sugerencia_ia"],
             "fishbase": counter["fishbase"],
+            "reclasificado": counter["reclasificado"],
             "critical": counter["critical"],
             "serious": counter["serious"],
             "warning": counter["warning"],
@@ -416,6 +460,7 @@ def build(tolerance: float) -> dict:
                                     if (item.get("evidence_b6") or {}).get("quote")),
             "ai_suggestions": len(ai),
             "fishbase_suggestions": len(fbs),
+            "reclass_suggestions": len(rec),
             "fishbase_contradicts": sum(
                 1 for item in items
                 if item.get("fb_suggestion") and item["values"]

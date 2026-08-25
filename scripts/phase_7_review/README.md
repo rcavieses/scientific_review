@@ -100,9 +100,9 @@ así que las cinco son compatibles y lo que parecía conflicto no lo es.
 5. **Decisión** — valor final, fuente (B1/B3/B4/B5, RAG, manual), revisor y
    comentario. Tres salidas: *Aceptar*, *Falta evidencia*, *Descartar celda*.
 
-## Los cuatro canales, y por qué están separados
+## Los cinco canales, y por qué están separados
 
-La cola mezcla celdas de cuatro procedencias distintas. La interfaz las mantiene
+La cola mezcla celdas de cinco procedencias distintas. La interfaz las mantiene
 distinguibles en todo momento —insignia propia, caja propia, descargo propio—
 porque el valor de este tablero está justamente en no confundirlas:
 
@@ -112,6 +112,7 @@ porque el valor de este tablero está justamente en no confundirlas:
 | `sin_respaldo` | Una búsqueda lo afirma y B6 no lo halló en el corpus | Si el valor existe en algún lado |
 | `sugerencia_ia` | **Inferencia taxonómica del modelo.** No sale de ningún registro | Que la cita sostenga la afirmación biológica |
 | `fishbase` | **Registro de una base curada.** Alguien lo midió y lo publicó | La referencia primaria, la especie y las unidades |
+| `reclasificado` | **Valor que ya existía, en la columna equivocada.** No es dato nuevo | Que la cantidad sea la que dice el reparto |
 
 La distinción entre los dos últimos es la que más fácil se pierde y la más cara
 de perder. `sugerencia_ia` es una hipótesis que dedujo el modelo; `fishbase` es
@@ -169,6 +170,58 @@ número escondería esa dispersión.
 > sugerencias salen con confianza **baja** y con el aviso escrito: hay que
 > decidir qué mide el campo antes de aceptar ninguna.
 
+## El esquema de crecimiento y peso-talla
+
+Hasta agosto de 2026 existían dos columnas, `Von_bertalanffy_a` y
+`Von_bertalanffy_b`, que entre las cinco búsquedas acumularon **cuatro
+cantidades distintas**: 29 valores de L∞, 6 de t₀ y 4 del coeficiente *a* de
+peso-talla en `_a`; 35 de K y 19 del exponente *b* en `_b`.
+
+**La causa fue el nombre, no la extracción.** El Excel de origen siempre dijo,
+en sus columnas 13 y 14, «Coefficient a/b of the allometric length–weight
+relationship» — es decir, `li_a` y `li_b`. Al generar el CSV se renombraron a
+`Von_bertalanffy_a/b`, y ese nombre equivocado es el que se le pasó al
+extractor: «Von Bertalanffy coefficient a» no significa nada, porque la
+ecuación de von Bertalanffy tiene L∞, K y t₀, no una «a» ni una «b». Sin una
+definición real, cada corrida resolvió la ambigüedad a su manera. B6 la
+redefinió explícitamente como a = L∞ y b = K, lo que además dejó
+`Von_bertalanffy_b` duplicando a `growth_rate`.
+
+El esquema actual separa cada cantidad:
+
+| Columna | Qué es | Origen |
+|---|---|---|
+| `li_a` | Coeficiente *a* de W = a·L^b | Columna 13 del Excel, con su nombre correcto |
+| `li_b` | Exponente *b* de W = a·L^b | Columna 14 del Excel, con su nombre correcto |
+| `vb_Linf` | Talla asintótica L∞ (cm) | Columna 28, nueva |
+| `vb_t0` | Edad teórica a talla cero t₀ (años) | Columna 29, nueva |
+| `growth_rate` | Coeficiente K (1/año) | Ya existía. **Única casa de K** |
+
+K vive sólo en `growth_rate`: darle dos columnas fue parte del enredo original.
+
+Los valores ya extraídos no se reescribieron: `reclassify_vb.py` los reparte a
+su columna real y los manda al tablero como celdas pendientes, porque el
+reparto es una lectura de la magnitud y una lectura la confirma un humano.
+
+```bash
+python3 scripts/phase_7_review/reclassify_vb.py --informe   # ver el reparto
+python3 scripts/phase_7_review/reclassify_vb.py             # generarlo
+```
+
+### Dos errores que el reparto dejó a la vista
+
+**Milímetros contra centímetros.** Cuatro celdas discrepan exactamente 10×
+entre búsquedas (43.2 contra 432.32). B6 llegó a anotar «mm total length,
+converted to cm (42.77)» y guardó igualmente 427.655: describió la conversión
+sin aplicarla. El script propone el valor en escala cm y baja la confianza,
+pero nunca lo resuelve en silencio.
+
+**Colisión de epítetos.** Esas cuatro celdas son `Atherinops affinis`,
+`Elops affinis`, `Caulolatilus affinis` y `Aythya affinis` — un pejerrey, un
+machete, un blanquillo y **un pato**, intercambiándose los mismos cuatro
+números porque comparten el epíteto. Es la firma del emparejamiento difuso, y
+el script lo nombra explícitamente en cada celda afectada.
+
 ## Archivos
 
 | Ruta | Qué es |
@@ -176,6 +229,7 @@ número escondería esa dispersión.
 | `build_review_queue.py` | Construye la cola comparando los CSV y fusionando los dos canales de sugerencia |
 | `ai_suggestions.py` | Sugerencias taxonómicas de IsMigratory, con cita verificable |
 | `fishbase_suggestions.py` | Descarga el snapshot de FishBase y emite sugerencias numéricas |
+| `reclassify_vb.py` | Reparte Von_bertalanffy_a/b al esquema nuevo, para revisión |
 | `review_server.py` | API FastAPI + servidor estático |
 | `static/` | Interfaz (HTML/CSS/JS sin dependencias) |
 | `outputs/review/review_queue.json` | La cola (regenerable) |
@@ -183,6 +237,7 @@ número escondería esa dispersión.
 | `outputs/review/rag_evidence.json` | Caché de consultas RAG por celda |
 | `outputs/review/ai_suggestions.json` | Sugerencias taxonómicas (regenerable) |
 | `outputs/review/fishbase_suggestions.json` | Sugerencias de FishBase (regenerable) |
+| `outputs/review/reclass_suggestions.json` | Reparto de esquema (regenerable) |
 | `data/external/fishbase/*.parquet` | Snapshot de FishBase, fuera de git (regenerable con `--download`) |
 | `outputs/review/Atlantis_GOC_parametros_consolidado.csv` | Export: mismo esquema de 24 columnas que las búsquedas |
 | `outputs/review/Atlantis_GOC_procedencia.csv` | Export: una fila por celda con estado, nº de búsquedas, dispersión y revisor |
@@ -199,6 +254,9 @@ El botón **Exportar CSV** fusiona las cuatro búsquedas aplicando las decisione
 | `sin_corroborar` | única búsqueda que lo reportó |
 | `sin_respaldo_b6` | otras búsquedas lo afirman, B6 no halló evidencia; el valor se conserva marcado |
 | `revisado_fuente_externa` | el revisor lo respaldó con una fuente ajena al corpus (columna `reference`) |
+| `revisado_fishbase` | el revisor aceptó el registro de FishBase |
+| `revisado_reclasificacion` | el revisor confirmó el reparto de columna |
+| `*_pendiente` | hay una sugerencia sin revisar; **la celda queda vacía a propósito** |
 
 ## Notas técnicas
 

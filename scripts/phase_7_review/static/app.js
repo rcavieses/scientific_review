@@ -233,7 +233,7 @@ function conflictKpi(t, reviewed, pct) {
 // cuentan: son la mayor parte de la cola y también piden decisión humana.
 // Omitirlas hacía que un grupo lleno de sugerencias se mostrara como vacío.
 function groupLoad(g) {
-  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0) + (g.fishbase || 0);
+  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0) + (g.fishbase || 0) + (g.reclasificado || 0);
 }
 
 function groupCard(g) {
@@ -258,7 +258,8 @@ function groupCard(g) {
       el('span', {}, `${g.conflicts || 0} discrepan`),
       el('span', {}, `${g.unsupported || 0} sin respaldo`),
       g.ai_suggested ? el('span', {}, `${g.ai_suggested} sugerencias`) : null,
-      g.fishbase ? el('span', {}, `${g.fishbase} FishBase`) : null),
+      g.fishbase ? el('span', {}, `${g.fishbase} FishBase`) : null,
+      g.reclasificado ? el('span', {}, `${g.reclasificado} reclasificadas`) : null),
     total ? bar : null,
     el('div', { class: 'meta' },
       el('span', {}, `${g.n_species} especies`),
@@ -363,6 +364,7 @@ function filtersBar(all) {
     ['sin_respaldo', 'Sin respaldo de B6'],
     ['sugerencia_ia', 'Sugerencia IA'],
     ['fishbase', 'FishBase'],
+    ['reclasificado', 'Reclasificadas'],
   ].map(([key, label]) => {
     const n = all.filter((i) => (i.tipo || 'conflicto') === key).length;
     return el('button', {
@@ -373,6 +375,8 @@ function filtersBar(all) {
             ? 'Inferencia taxonómica del modelo, sin respaldo documental: hipótesis a validar'
             : key === 'fishbase'
             ? 'Valor copiado de FishBase, base curada, con la referencia primaria del registro'
+            : key === 'reclasificado'
+            ? 'Valor que ya existía, repartido desde Von_bertalanffy_a/b a la columna que le corresponde'
             : 'Dos o más búsquedas dan valores distintos'),
       onclick: () => { f.tipo = key; render(); },
     }, `${label} ${n}`);
@@ -423,6 +427,8 @@ function conflictCard(item) {
     el('div', { style: 'display:flex;gap:6px;align-items:center' },
       item.tipo === 'sugerencia_ia'
         ? el('span', { class: 'badge ia', title: 'Inferencia taxonómica, sin respaldo documental' }, 'sugerencia IA')
+        : item.tipo === 'reclasificado'
+        ? el('span', { class: 'badge rc', title: 'Valor existente, movido a su columna real' }, 'reclasificada')
         : item.tipo === 'fishbase'
         ? el('span', { class: 'badge fb', title: 'Valor curado de FishBase, con referencia primaria' }, 'FishBase')
         : item.tipo === 'sin_respaldo'
@@ -490,6 +496,34 @@ function cardBody(item) {
           + 'Trátala como hipótesis con fuente, no como dato del corpus.'),
         el('button', { class: 'chip', style: 'margin-top:10px',
           onclick: () => fillDecision(item.id, sug.value, 'IA') }, 'Usar la sugerencia')));
+  }
+
+  // ── reparto de esquema ───────────────────────────────────────────────
+  // Aquí no hay valor nuevo: es el mismo número que ya estaba en el CSV, sólo
+  // que en la columna equivocada. Lo que se revisa no es el dato, es la lectura
+  // de a qué cantidad corresponde.
+  const rc = item.reclass_suggestion;
+  if (rc) {
+    body.append(
+      el('h4', {}, 'Reparto de esquema ',
+        el('span', { class: `conf conf-${rc.confidence}` }, `confianza ${rc.confidence}`)),
+      el('div', { class: 'rc-box' },
+        el('div', {}, el('b', {}, fmt(rc.value, item.kind)),
+          el('span', { class: 'hint' }, ` · ${rc.scope}`)),
+        el('div', { class: 'paper-grid', style: 'margin-top:8px' },
+          el('span', { class: 'pk' }, 'Columna de origen'),
+          el('span', { class: 'pv' }, rc.from_column),
+          el('span', { class: 'pk' }, 'Búsquedas que lo aportaron'),
+          el('span', { class: 'pv' }, Object.entries(rc.from_searches || {})
+            .map(([k, v]) => `${k}=${v}`).join(' · ') || '—')),
+        el('p', { style: 'margin:8px 0 0;font-size:13px;line-height:1.55' }, rc.rationale),
+        el('div', { class: 'hint', style: 'margin-top:10px' },
+          'El número ya existía: ', el('b', {}, 'lo que se propone es la columna, no el valor'),
+          '. La causa fue la definición que recibió el extractor —«Von Bertalanffy '
+          + 'coefficient a», que no existe: la ecuación tiene L∞, K y t₀—, así que cada '
+          + 'búsqueda la resolvió a su manera. Confirma que la cantidad es la que dice.'),
+        el('button', { class: 'chip', style: 'margin-top:10px',
+          onclick: () => fillDecision(item.id, rc.value, 'reclasificado') }, 'Usar este valor')));
   }
 
   // ── registro de FishBase ─────────────────────────────────────────────

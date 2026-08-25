@@ -58,8 +58,12 @@ PARAMETERS_MAPPING = {
     "max_age": (10, "float", "Edad máxima (años)"),
     "natural_mortality": (11, "float", "Tasa de mortalidad natural"),
     "Lmax": (12, "float", "Longitud máxima (cm)"),
-    "Von_bertalanffy_a": (13, "float", "Coeficiente a de Von Bertalanffy"),
-    "Von_bertalanffy_b": (14, "float", "Coeficiente b de Von Bertalanffy"),
+    "li_a": (13, "float", "Coeficiente a de la relación peso-talla W = a*L^b"),
+    "li_b": (14, "float", "Exponente b de la relación peso-talla W = a*L^b"),
+    # Columnas nuevas: el Excel no tenía dónde poner L∞ ni t₀, porque las 13 y 14
+    # siempre fueron la relación alométrica peso-talla. Se añaden al final.
+    "vb_Linf": (28, "float", "Talla asintótica L∞ de von Bertalanffy (cm)"),
+    "vb_t0": (29, "float", "Edad teórica a talla cero t₀ de von Bertalanffy (años)"),
     "growth_rate": (15, "float", "Tasa máxima de crecimiento"),
     "age_first_maturity": (18, "float", "Edad de primera madurez (años)"),
     "larval_duration": (21, "float", "Duración larval (días)"),
@@ -100,8 +104,11 @@ Your task is to intelligently map that information to these 14 specific table fi
 - max_age: maximum age (years)
 - natural_mortality: natural mortality rate (0-1)
 - Lmax: maximum length (cm)
-- Von_bertalanffy_a: Von Bertalanffy coefficient a
-- Von_bertalanffy_b: Von Bertalanffy coefficient b
+- li_a: coefficient a of the WEIGHT-LENGTH relationship W = a * L^b (typically 1e-6 to 1e-2). NOT a von Bertalanffy parameter.
+- li_b: exponent b of the WEIGHT-LENGTH relationship W = a * L^b (typically 2.5 to 3.5, near 3). NOT a von Bertalanffy parameter.
+- vb_Linf: von Bertalanffy asymptotic length L-infinity, in cm.
+- vb_t0: von Bertalanffy theoretical age at zero length t0, in years (usually negative).
+- growth_rate: von Bertalanffy growth coefficient K, in 1/year. This is the ONLY column for K; do not repeat it anywhere else.
 - growth_rate: growth rate
 - age_first_maturity: age at first maturity (years)
 - larval_duration: larval duration (days)
@@ -229,7 +236,7 @@ def query_rag_for_species(
             f"{extracted_info}\n\n"
             f"Map this information intelligently to these 14 table fields: "
             f"biomass_mt, abundance_numbers, mean_body_size, max_age, natural_mortality, "
-            f"Lmax, Von_bertalanffy_a, Von_bertalanffy_b, growth_rate, "
+            f"Lmax, li_a, li_b, vb_Linf, vb_t0, growth_rate, "
             f"age_first_maturity, larval_duration, StartSpawnDayOfYear, EndSpawnDayOfYear, IsMigratory. "
             f"\n\nReturn ONLY JSON with exactly these 14 fields."
         )
@@ -353,6 +360,9 @@ def insert_parameter_to_xlsx(wb, row_num: int, param_name: str, value: Optional[
         return
 
     col_idx, param_type, _ = PARAMETERS_MAPPING[param_name]
+    if col_idx is None:
+        logger.warning(f"'{param_name}' no tiene columna asignada en el Excel; se omite")
+        return False
 
     # Convertir índice de columna a letra (A, B, C, ... AA, AB, ...)
     col_letter = openpyxl.utils.get_column_letter(col_idx)

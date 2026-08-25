@@ -421,6 +421,23 @@ details.fold > summary:hover { color: var(--accent); }
   border-color: color-mix(in srgb, #4fc7ba 30%, var(--border));
 }
 
+/* Reparto de esquema. Ámbar: no es un dato nuevo ni una hipótesis, es una
+   corrección de dónde vivía un número que ya teníamos. */
+.badge.rc { color: #8a5a00; border-color: color-mix(in srgb, #8a5a00 40%, var(--border)); }
+:root[data-theme="dark"] .badge.rc,
+:root:not([data-theme="light"]) .badge.rc { color: #e0a640; }
+
+.rc-box {
+  background: color-mix(in srgb, #8a5a00 6%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #8a5a00 32%, var(--border));
+  border-radius: 8px; padding: 12px;
+}
+:root[data-theme="dark"] .rc-box,
+:root:not([data-theme="light"]) .rc-box {
+  background: color-mix(in srgb, #e0a640 8%, var(--surface-1));
+  border-color: color-mix(in srgb, #e0a640 28%, var(--border));
+}
+
 .conf {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--border); text-transform: none; letter-spacing: 0;

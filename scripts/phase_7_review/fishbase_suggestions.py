@@ -104,28 +104,32 @@ PARAM_MAP = {
         "ref_col": "MaturityRefNo", "spec_col": "Speccode",
         "what": "edad de primera madurez tm",
     },
-    "Von_bertalanffy_a": {
-        "table": "poplw", "col": "a", "agg": True, "unit": "—",
-        "ref_col": "PopLWRef", "ambiguo": True,
-        "what": "coeficiente a de la relación longitud–peso W = a·L^b",
+    # Con el esquema separado, cada cantidad tiene su columna y FishBase la
+    # llena sin ambigüedad: se acabó el aviso de convención que hacía falta
+    # mientras Von_bertalanffy_a/b mezclaba cuatro cosas bajo dos nombres.
+    "li_a": {
+        "table": "poplw", "col": "a", "agg": True, "unit": "",
+        "ref_col": "PopLWRef",
+        "what": "coeficiente a de la relación peso–talla W = a·L^b",
     },
-    "Von_bertalanffy_b": {
-        "table": "poplw", "col": "b", "agg": True, "unit": "—",
-        "ref_col": "PopLWRef", "ambiguo": True,
-        "what": "exponente b de la relación longitud–peso W = a·L^b",
+    "li_b": {
+        "table": "poplw", "col": "b", "agg": True, "unit": "",
+        "ref_col": "PopLWRef",
+        "what": "exponente b de la relación peso–talla W = a·L^b",
+    },
+    "vb_Linf": {
+        "table": "popgrowth", "col": "Loo", "agg": True, "unit": "cm",
+        "ref_col": "PopGrowthRef",
+        "what": "talla asintótica L∞ de von Bertalanffy",
+    },
+    "vb_t0": {
+        "table": "popgrowth", "col": "to", "agg": True, "unit": "años",
+        "ref_col": "PopGrowthRef", "negativo": True,
+        "what": "edad teórica a talla cero t₀ de von Bertalanffy",
     },
 }
 
-# La columna Von_bertalanffy_a/b del CSV base está usada con al menos tres
-# convenciones incompatibles a la vez (L∞, K, t0 y la a/b de longitud–peso).
-# FishBase da la de longitud–peso, que es la que Atlantis llama li_a/li_b,
-# pero mientras la columna siga mezclando convenciones ningún valor es
-# aceptable sin que un humano decida primero qué mide el campo.
-AVISO_AMBIGUO = (
-    "OJO con la convención: esta columna del CSV base mezcla al menos tres "
-    "cosas distintas (L∞, K, t0 y la a/b de longitud–peso). FishBase da aquí "
-    "la de longitud–peso, W = a·L^b. Decide qué mide el campo antes de aceptar."
-)
+
 
 
 # ── descarga del snapshot ───────────────────────────────────────────────
@@ -226,7 +230,8 @@ def valor_agregado(fb, spec: int, meta: dict):
     col_spec = meta.get("spec_col", "SpecCode")
     filas = tabla[tabla[col_spec] == spec]
     serie = pd.to_numeric(filas[meta["col"]], errors="coerce").dropna()
-    serie = serie[serie > 0]
+    # t₀ es negativo por definición; el resto de cantidades no puede ser ≤ 0.
+    serie = serie[serie != 0] if meta.get("negativo") else serie[serie > 0]
     if serie.empty:
         return None
     refs = []
@@ -251,12 +256,12 @@ def valor_agregado(fb, spec: int, meta: dict):
 
 def confianza(meta: dict, dato: dict) -> str:
     """Alta sólo si hay varios registros concordantes; baja si el campo es ambiguo."""
-    if meta.get("ambiguo"):
-        return "baja"
     if not meta["agg"]:
         return "alta"
     lo, hi = dato["rango"]
-    disperso = hi > 2 * lo if lo > 0 else True
+    a, b = abs(lo), abs(hi)
+    lo_abs, hi_abs = min(a, b), max(a, b)
+    disperso = hi_abs > 2 * lo_abs if lo_abs > 0 else True
     if dato["n"] >= 3 and not disperso:
         return "alta"
     if dato["n"] >= 3 or not disperso:
@@ -279,8 +284,6 @@ def razonamiento(meta: dict, dato: dict, nombre: str, via: str) -> str:
         partes.append(via)
     if not dato["refs"] and meta["agg"]:
         partes.append("El registro no trae referencia primaria: sólo respalda FishBase.")
-    if meta.get("ambiguo"):
-        partes.append(AVISO_AMBIGUO)
     return " ".join(partes)
 
 

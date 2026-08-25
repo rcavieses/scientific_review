@@ -576,20 +576,30 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
             kind = meta["type"]
             raw = {}
             for key, df in frames.items():
+                if param not in df.columns:
+                    continue
                 value = norm_num(df.at[idx, param]) if kind == "num" else norm_cat(df.at[idx, param])
                 if value is not None:
                     raw[key] = value
-            if not raw:
-                continue
 
             item_id = f"{idx}:{param}"
+            # Una celda vacía en las búsquedas puede tener aun así una decisión
+            # tomada sobre una sugerencia (IA, FishBase o reclasificación).
+            # Descartarla aquí dejaba el canal de revisión sin efecto: el
+            # revisor aceptaba el valor y no aparecía nunca en el CSV.
+            if not raw and item_id not in conflicts:
+                continue
+
             item = conflicts.get(item_id)
             decision = decisions.get(item_id)
 
             if item and decision and decision["status"] == "accepted":
                 value = decision["value"]
                 status = {"externo": "revisado_fuente_externa",
-                          "IA": "revisado_sugerencia_ia"}.get(decision.get("source"), "revisado")
+                          "IA": "revisado_sugerencia_ia",
+                          "FishBase": "revisado_fishbase",
+                          "reclasificado": "revisado_reclasificacion"}.get(
+                              decision.get("source"), "revisado")
                 note = " · ".join(x for x in (decision.get("reference", ""),
                                               decision.get("comment", "")) if x)
                 if decision.get("source") == "IA":
@@ -636,6 +646,19 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                     value = Counter(independent.values()).most_common(1)[0][0]
                 status = "sin_respaldo_b6"
                 note = f"{len(independent)} búsqueda(s) lo afirman; B6 no halló evidencia en el corpus"
+            elif item and item.get("tipo") in ("sugerencia_ia", "fishbase", "reclasificado"):
+                # Sugerencia sin revisar. NO se escribe valor: una sugerencia sólo
+                # se convierte en dato cuando un humano la acepta. Queda la fila
+                # de procedencia para que se vea que está pendiente.
+                provenance.append({
+                    "row": idx, "Species": base.at[idx, "Species"], "Group": base.at[idx, "Group"],
+                    "param": param, "value": None,
+                    "status": f"{item['tipo']}_pendiente",
+                    "n_searches": len(raw), "spread_pct": 0.0,
+                    "searches": ";".join(f"{k}={v}" for k, v in raw.items()),
+                    "reviewer": "", "note": f"propuesto: {item['suggested']} · {item['suggested_method']}",
+                })
+                continue
             elif item:
                 value = item["suggested"]
                 status = "conflicto_pendiente"
