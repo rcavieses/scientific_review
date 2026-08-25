@@ -41,6 +41,11 @@ búsquedas comparables (B1, B3, B4, B5, **B6**):
 | **Discrepan** | **27** | cola de revisión |
 | **Sin respaldo de B6** | **431** | cola de revisión, etiqueta propia |
 
+A esas se suman dos canales que no vienen de las búsquedas: las **sugerencias de
+IA** (748 celdas, inferencia taxonómica con cita) y los **registros de FishBase**
+(2 344 celdas, valores curados con su referencia primaria). Se filtran por
+separado y nunca se mezclan entre sí — ver «Los cuatro canales».
+
 Dos tipos de celda entran a revisión, y se filtran por separado en la interfaz:
 
 - **Discrepan** — dos o más búsquedas dan valores distintos (numérico: dispersión
@@ -95,16 +100,90 @@ así que las cinco son compatibles y lo que parecía conflicto no lo es.
 5. **Decisión** — valor final, fuente (B1/B3/B4/B5, RAG, manual), revisor y
    comentario. Tres salidas: *Aceptar*, *Falta evidencia*, *Descartar celda*.
 
+## Los cuatro canales, y por qué están separados
+
+La cola mezcla celdas de cuatro procedencias distintas. La interfaz las mantiene
+distinguibles en todo momento —insignia propia, caja propia, descargo propio—
+porque el valor de este tablero está justamente en no confundirlas:
+
+| Canal | Qué es | Qué hay que verificar |
+|---|---|---|
+| `conflicto` | Dos o más búsquedas del corpus discrepan | Cuál de los valores es correcto |
+| `sin_respaldo` | Una búsqueda lo afirma y B6 no lo halló en el corpus | Si el valor existe en algún lado |
+| `sugerencia_ia` | **Inferencia taxonómica del modelo.** No sale de ningún registro | Que la cita sostenga la afirmación biológica |
+| `fishbase` | **Registro de una base curada.** Alguien lo midió y lo publicó | La referencia primaria, la especie y las unidades |
+
+La distinción entre los dos últimos es la que más fácil se pierde y la más cara
+de perder. `sugerencia_ia` es una hipótesis que dedujo el modelo; `fishbase` es
+un dato que alguien midió. Por eso la caja de IA lleva borde punteado y la de
+FishBase borde continuo: se ven distintas antes de leer una palabra.
+
+### Cómo se generan
+
+```bash
+# Sugerencias taxonómicas (IsMigratory), con cita académica verificable
+python3 scripts/phase_7_review/ai_suggestions.py --top-groups 60
+
+# Snapshot de FishBase — sólo la primera vez, o para actualizar versión
+python3 scripts/phase_7_review/fishbase_suggestions.py --download
+
+# Valores numéricos de FishBase, con su referencia primaria
+python3 scripts/phase_7_review/fishbase_suggestions.py
+
+# Reconstruir la cola con ambos canales dentro
+python3 scripts/phase_7_review/build_review_queue.py
+```
+
+### De dónde sale FishBase
+
+Del snapshot público en parquet que consume hoy `rfishbase`, servido por Source
+Cooperative (`cboettig/fishbase/fb/v24.07/parquet`). Se descarga a
+`data/external/fishbase/` (33 MB, fuera de git) y se consulta en local: las
+consultas son reproducibles y no dependen de que un servicio esté en pie. Es
+además la única vía viva — la API histórica de FishBase ya no existe, el espejo
+de rOpenSci está caído y las páginas web están tras un desafío de Cloudflare.
+
+Los ocho parámetros que cubre, y de qué tabla salen:
+
+| Parámetro | Tabla · columna | Agregación |
+|---|---|---|
+| `Lmax` | `species.Length` | valor curado único |
+| `mean_body_size` | `species.CommonLength` | valor curado único |
+| `max_age` | `species.LongevityWild` | valor curado único |
+| `natural_mortality` | `popgrowth.M` | mediana de los registros |
+| `growth_rate` | `popgrowth.K` | mediana de los registros |
+| `age_first_maturity` | `maturity.tm` | mediana de los registros |
+| `Von_bertalanffy_a` | `poplw.a` | mediana · **convención ambigua** |
+| `Von_bertalanffy_b` | `poplw.b` | mediana · **convención ambigua** |
+
+Donde hay varios registros (varios stocks, sexos y localidades) se propone la
+mediana y se muestran el número de registros y el rango observado: un solo
+número escondería esa dispersión.
+
+> **Aviso sobre `Von_bertalanffy_a/b`.** La columna del CSV base está usada hoy
+> con al menos tres convenciones incompatibles a la vez: hay valores que son L∞
+> (427.66), otros que son la *a* de longitud–peso (2e-06) y otros que son t₀
+> (-0.26); y varios `Von_bertalanffy_b` coinciden exactamente con `growth_rate`,
+> o sea que ahí se guardó K. FishBase aporta la relación longitud–peso
+> (W = a·L^b), que es lo que Atlantis llama `li_a`/`li_b`. Todas estas
+> sugerencias salen con confianza **baja** y con el aviso escrito: hay que
+> decidir qué mide el campo antes de aceptar ninguna.
+
 ## Archivos
 
 | Ruta | Qué es |
 |---|---|
-| `build_review_queue.py` | Construye la cola comparando los 4 CSV |
+| `build_review_queue.py` | Construye la cola comparando los CSV y fusionando los dos canales de sugerencia |
+| `ai_suggestions.py` | Sugerencias taxonómicas de IsMigratory, con cita verificable |
+| `fishbase_suggestions.py` | Descarga el snapshot de FishBase y emite sugerencias numéricas |
 | `review_server.py` | API FastAPI + servidor estático |
 | `static/` | Interfaz (HTML/CSS/JS sin dependencias) |
 | `outputs/review/review_queue.json` | La cola (regenerable) |
 | `outputs/review/decisions.json` | Decisiones del revisor, con historial |
 | `outputs/review/rag_evidence.json` | Caché de consultas RAG por celda |
+| `outputs/review/ai_suggestions.json` | Sugerencias taxonómicas (regenerable) |
+| `outputs/review/fishbase_suggestions.json` | Sugerencias de FishBase (regenerable) |
+| `data/external/fishbase/*.parquet` | Snapshot de FishBase, fuera de git (regenerable con `--download`) |
 | `outputs/review/Atlantis_GOC_parametros_consolidado.csv` | Export: mismo esquema de 24 columnas que las búsquedas |
 | `outputs/review/Atlantis_GOC_procedencia.csv` | Export: una fila por celda con estado, nº de búsquedas, dispersión y revisor |
 

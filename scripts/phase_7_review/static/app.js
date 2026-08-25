@@ -192,6 +192,7 @@ function renderHome() {
     kpi((t.by_tipo || {}).conflicto || 0, 'Discrepan', 'dos o más búsquedas, valores distintos'),
     kpi((t.by_tipo || {}).sin_respaldo || 0, 'Sin respaldo', 'B6 no halló evidencia en el corpus'),
     kpi((t.by_tipo || {}).sugerencia_ia || 0, 'Sugerencias IA', `${t.ai_contradicts || 0} contradicen a las búsquedas`),
+    kpi((t.by_tipo || {}).fishbase || 0, 'De FishBase', 'valores curados con su referencia primaria'),
     kpi(t.cells_with_quote || 0, 'Con cita textual', 'respaldadas por B6 con fragmento verbatim'),
     conflictKpi(t, reviewed, pct),
     kpi(flagged, 'Marcadas', 'requieren más evidencia'),
@@ -232,7 +233,7 @@ function conflictKpi(t, reviewed, pct) {
 // cuentan: son la mayor parte de la cola y también piden decisión humana.
 // Omitirlas hacía que un grupo lleno de sugerencias se mostrara como vacío.
 function groupLoad(g) {
-  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0);
+  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0) + (g.fishbase || 0);
 }
 
 function groupCard(g) {
@@ -256,7 +257,8 @@ function groupCard(g) {
     el('div', { class: 'meta' },
       el('span', {}, `${g.conflicts || 0} discrepan`),
       el('span', {}, `${g.unsupported || 0} sin respaldo`),
-      g.ai_suggested ? el('span', {}, `${g.ai_suggested} sugerencias`) : null),
+      g.ai_suggested ? el('span', {}, `${g.ai_suggested} sugerencias`) : null,
+      g.fishbase ? el('span', {}, `${g.fishbase} FishBase`) : null),
     total ? bar : null,
     el('div', { class: 'meta' },
       el('span', {}, `${g.n_species} especies`),
@@ -360,6 +362,7 @@ function filtersBar(all) {
     ['conflicto', 'Discrepan'],
     ['sin_respaldo', 'Sin respaldo de B6'],
     ['sugerencia_ia', 'Sugerencia IA'],
+    ['fishbase', 'FishBase'],
   ].map(([key, label]) => {
     const n = all.filter((i) => (i.tipo || 'conflicto') === key).length;
     return el('button', {
@@ -368,6 +371,8 @@ function filtersBar(all) {
         ? 'Otra búsqueda afirma un valor que la corrida con evidencia (B6) no encontró en el corpus'
         : (key === 'sugerencia_ia'
             ? 'Inferencia taxonómica del modelo, sin respaldo documental: hipótesis a validar'
+            : key === 'fishbase'
+            ? 'Valor copiado de FishBase, base curada, con la referencia primaria del registro'
             : 'Dos o más búsquedas dan valores distintos'),
       onclick: () => { f.tipo = key; render(); },
     }, `${label} ${n}`);
@@ -418,6 +423,8 @@ function conflictCard(item) {
     el('div', { style: 'display:flex;gap:6px;align-items:center' },
       item.tipo === 'sugerencia_ia'
         ? el('span', { class: 'badge ia', title: 'Inferencia taxonómica, sin respaldo documental' }, 'sugerencia IA')
+        : item.tipo === 'fishbase'
+        ? el('span', { class: 'badge fb', title: 'Valor curado de FishBase, con referencia primaria' }, 'FishBase')
         : item.tipo === 'sin_respaldo'
         ? el('span', { class: 'badge crit', title: 'B6 no encontró evidencia en el corpus' }, 'sin respaldo')
         : (item.kind === 'num'
@@ -483,6 +490,36 @@ function cardBody(item) {
           + 'Trátala como hipótesis con fuente, no como dato del corpus.'),
         el('button', { class: 'chip', style: 'margin-top:10px',
           onclick: () => fillDecision(item.id, sug.value, 'IA') }, 'Usar la sugerencia')));
+  }
+
+  // ── registro de FishBase ─────────────────────────────────────────────
+  // Deliberadamente separado de la sugerencia de IA y con otro descargo: una
+  // no es la otra. La de arriba es una hipótesis que dedujo el modelo; ésta es
+  // un dato que alguien midió, publicó y FishBase catalogó. Presentarlas con
+  // el mismo texto borraría la única distinción que importa al revisar.
+  const fb = item.fb_suggestion;
+  if (fb) {
+    const rango = fb.observed_range;
+    body.append(
+      el('h4', {}, 'Registro de FishBase ',
+        el('span', { class: `conf conf-${fb.confidence}` }, `confianza ${fb.confidence}`)),
+      el('div', { class: 'fb-box' },
+        el('div', {}, el('b', {}, fmt(fb.value, item.kind)),
+          fb.unit && fb.unit !== '—' ? el('span', { class: 'hint' }, ` ${fb.unit}`) : null,
+          el('span', { class: 'hint' }, ` · ${fb.scope}`)),
+        el('div', { class: 'paper-grid', style: 'margin-top:8px' },
+          el('span', { class: 'pk' }, 'Registros'), el('span', { class: 'pv' }, fb.n_records),
+          el('span', { class: 'pk' }, 'Rango observado'),
+          el('span', { class: 'pv' }, rango ? `${rango[0]} – ${rango[1]} ${fb.unit || ''}` : 'un solo registro')),
+        el('p', { style: 'margin:8px 0 0;font-size:13px;line-height:1.55' }, fb.rationale),
+        citasIA(fb.citations),
+        el('div', { class: 'hint', style: 'margin-top:10px' },
+          'Valor copiado de una base curada: ', el('b', {}, 'ni inferencia del modelo ni extracción del corpus'),
+          '. Lo que hay que ir a comprobar es la referencia primaria; FishBase es el '
+          + 'intermediario, no la evidencia. Confirma también que la especie de FishBase '
+          + 'es la misma del modelo y que las unidades coinciden con las de tu columna.'),
+        el('button', { class: 'chip', style: 'margin-top:10px',
+          onclick: () => fillDecision(item.id, fb.value, 'FishBase') }, 'Usar el valor de FishBase')));
   }
 
   const ev = item.evidence_b6;

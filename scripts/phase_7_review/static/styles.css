@@ -403,6 +403,24 @@ details.fold > summary:hover { color: var(--accent); }
   border-color: color-mix(in srgb, #9085e9 35%, var(--border));
 }
 
+/* Registro de FishBase. El borde es continuo a propósito: la caja de IA lo
+   lleva punteado porque es una hipótesis, y esto es un dato ya publicado.
+   La distinción tiene que verse antes de leer una sola palabra. */
+.badge.fb { color: #0e6b63; border-color: color-mix(in srgb, #0e6b63 40%, var(--border)); }
+:root[data-theme="dark"] .badge.fb,
+:root:not([data-theme="light"]) .badge.fb { color: #4fc7ba; }
+
+.fb-box {
+  background: color-mix(in srgb, #0e6b63 6%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #0e6b63 35%, var(--border));
+  border-radius: 8px; padding: 12px;
+}
+:root[data-theme="dark"] .fb-box,
+:root:not([data-theme="light"]) .fb-box {
+  background: color-mix(in srgb, #4fc7ba 8%, var(--surface-1));
+  border-color: color-mix(in srgb, #4fc7ba 30%, var(--border));
+}
+
 .conf {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--border); text-transform: none; letter-spacing: 0;

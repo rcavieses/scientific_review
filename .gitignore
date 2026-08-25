@@ -129,3 +129,7 @@ pdfs_indexed.txt
 # ── Modelos de embeddings (se descargan localmente) ────────────────────────
 models/
 !models/.gitkeep
+# Snapshot de FishBase (33 MB de parquet). Es un artefacto descargable y
+# versionado por su propio número de release: se rehace con
+#   python3 scripts/phase_7_review/fishbase_suggestions.py --download
+/data/external/fishbase/

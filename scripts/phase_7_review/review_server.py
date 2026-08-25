@@ -599,6 +599,18 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                     refs = [c["ref"] for c in (item.get("ai_suggestion") or {}).get("citations", [])]
                     if refs:
                         note = " · ".join(x for x in (note, "cita: " + " | ".join(refs)) if x)
+                if decision.get("source") == "FishBase":
+                    # Igual que arriba, pero el valor no lo dedujo el modelo: lo
+                    # publicó alguien y FishBase lo catalogó. El export conserva
+                    # el SpecCode y la referencia primaria para poder rastrearlo.
+                    fbs = item.get("fb_suggestion") or {}
+                    refs = [c["ref"] for c in fbs.get("citations", [])]
+                    marca = f"FishBase SpecCode {fbs.get('speccode')}" if fbs.get("speccode") else "FishBase"
+                    if fbs.get("n_records", 0) > 1:
+                        marca += f", mediana de {fbs['n_records']} registros"
+                    note = " · ".join(x for x in (note, marca) if x)
+                    if refs:
+                        note = " · ".join(x for x in (note, "cita: " + " | ".join(refs)) if x)
                 if kind == "num":
                     value = norm_num(value)
             elif item and decision and decision["status"] == "rejected":
