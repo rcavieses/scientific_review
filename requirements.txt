@@ -35,3 +35,10 @@ pytest>=7.0.0
 
 # Logging and utilities
 colorama>=0.4.6
+
+# NotebookLM (OPCIONAL — sólo el canal de sugerencias de fase 7)
+# NO es una librería oficial de Google: habla APIs internas con las cookies de
+# tu sesión y puede romperse sin aviso. Nada del pipeline principal depende de
+# ella. Instálala sólo si vas a usar scripts/phase_7_review/nblm_extract.py:
+#     pip install "notebooklm-py[browser]" && notebooklm login
+# notebooklm-py>=0.1

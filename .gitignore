@@ -133,3 +133,6 @@ models/
 # versionado por su propio número de release: se rehace con
 #   python3 scripts/phase_7_review/fishbase_suggestions.py --download
 /data/external/fishbase/
+
+# Ids de los notebooks de NotebookLM (config local, no del repo)
+config/notebooklm.json

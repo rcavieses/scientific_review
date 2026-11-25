@@ -23,6 +23,8 @@ const state = {
   fb: null,                // índice de grupos de FishBase
   fbGroup: null,           // tabla del grupo abierto
   fbBusy: false,
+  matrix: null,            // tabla completa especie × parámetro
+  mx: { group: '', q: '', verPendientes: true, soloConDato: false },
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -186,8 +188,16 @@ const isDecided = (id) => ['accepted', 'rejected'].includes(decisionOf(id)?.stat
 function renderHome() {
   const q = state.queue;
   const t = q.totals;
-  const reviewed = Object.values(state.decisions).filter((d) => ['accepted', 'rejected'].includes(d.status)).length;
-  const flagged = Object.values(state.decisions).filter((d) => d.status === 'needs_more_evidence').length;
+  // El avance se mide SÓLO sobre la cola. `decisions.json` guarda además las
+  // celdas resueltas fuera de ella —FishBase tiene su propia página— y contarlas
+  // contra el tamaño de la cola daba porcentajes por encima de 100.
+  const enCola = new Set(state.queue.items.map((i) => i.id));
+  const resueltas = Object.entries(state.decisions)
+    .filter(([, d]) => ['accepted', 'rejected'].includes(d.status));
+  const reviewed = resueltas.filter(([id]) => enCola.has(id)).length;
+  const fuera = resueltas.length - reviewed;
+  const flagged = Object.entries(state.decisions)
+    .filter(([id, d]) => enCola.has(id) && d.status === 'needs_more_evidence').length;
   const pct = t.conflicts ? Math.round(reviewed / t.conflicts * 100) : 0;
 
   const kpis = el('div', { class: 'kpis' },
@@ -195,8 +205,8 @@ function renderHome() {
     kpi((t.by_tipo || {}).conflicto || 0, 'Discrepan', 'dos o más búsquedas, valores distintos'),
     kpi((t.by_tipo || {}).sin_respaldo || 0, 'Sin respaldo', 'B6 no halló evidencia en el corpus'),
     kpi((t.by_tipo || {}).sugerencia_ia || 0, 'Sugerencias IA', `${t.ai_contradicts || 0} contradicen a las búsquedas`),
-    kpi(t.cells_with_quote || 0, 'Con cita textual', 'respaldadas por B6 con fragmento verbatim'),
-    conflictKpi(t, reviewed, pct),
+    quoteKpi(t),
+    conflictKpi(t, reviewed, pct, fuera),
     kpi(flagged, 'Marcadas', 'requieren más evidencia'),
   );
 
@@ -214,7 +224,10 @@ function renderHome() {
         'Ver la cola completa →'),
       el('button', { class: 'ghost', style: 'float:right;font-size:13px;margin-right:8px',
                      onclick: () => go({ view: 'fb', group: null }) },
-        'Parámetros de FishBase →')),
+        'Parámetros de FishBase →'),
+      el('button', { class: 'ghost', style: 'float:right;font-size:13px;margin-right:8px',
+                     onclick: () => go({ view: 'matrix', group: null }) },
+        'Todos los parámetros →')),
     el('div', { class: 'cards' }, groups.map(groupCard)),
     quiet.length ? el('h2', {}, 'Sin celdas por revisar ', el('span', {}, `(${quiet.length} grupos)`)) : null,
     quiet.length ? el('div', { class: 'cards' }, quiet.map(groupCard)) : null,
@@ -228,17 +241,42 @@ function kpi(val, label, sub) {
     sub ? el('div', { class: 'sub' }, sub) : null);
 }
 
-function conflictKpi(t, reviewed, pct) {
+// Las celdas con cita verbatim de B6 son el subconjunto que puede resolverse sin
+// volver al PDF, así que el resumen tiene que decir cuántas quedan. `cells_with_quote`
+// es un total congelado al construir la cola: se recuenta contra las decisiones
+// vivas o el tablero seguiría anunciando trabajo pendiente que ya está hecho.
+function quoteKpi(t) {
+  const total = t.cells_with_quote || 0;
+  const conCita = state.queue.items.filter((i) => i.evidence_b6?.quote);
+  const done = conCita.filter((i) => isDecided(i.id)).length;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  const node = kpi(total, 'Con cita textual',
+    done ? `${done} resueltas · ${total - done} por revisar` : 'respaldadas por B6 con fragmento verbatim');
+  node.append(el('div', { class: 'progress' }, el('i', { style: `width:${pct}%` })));
+  return node;
+}
+
+function conflictKpi(t, reviewed, pct, fuera) {
   const node = kpi(t.conflicts, 'En revisión', `${reviewed} resueltas · ${pct}%`);
   node.append(el('div', { class: 'progress' }, el('i', { style: `width:${pct}%` })));
+  // Las resueltas fuera de la cola no caben en esta barra, pero tampoco pueden
+  // desaparecer del resumen: son trabajo hecho, y quien lo hizo tiene que verlo.
+  if (fuera) {
+    node.append(el('div', { class: 'sub' },
+      `+${fuera.toLocaleString('es-MX')} resueltas fuera de esta cola `
+      + '(casi todas, en la página de FishBase)'));
+  }
   return node;
 }
 
 // Celdas que este grupo pone en la cola de revisión. Las sugerencias de IA
 // cuentan: son la mayor parte de la cola y también piden decisión humana.
 // Omitirlas hacía que un grupo lleno de sugerencias se mostrara como vacío.
+// Lo mismo vale para peso-talla y NotebookLM: si no se cuentan, un grupo cuya
+// cola sea sólo de esos canales se pinta como si no tuviera nada que revisar.
 function groupLoad(g) {
-  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0) + (g.reclasificado || 0);
+  return (g.conflicts || 0) + (g.unsupported || 0) + (g.ai_suggested || 0)
+    + (g.reclasificado || 0) + (g.peso_talla || 0) + (g.notebooklm || 0);
 }
 
 function groupCard(g) {
@@ -263,7 +301,9 @@ function groupCard(g) {
       el('span', {}, `${g.conflicts || 0} discrepan`),
       el('span', {}, `${g.unsupported || 0} sin respaldo`),
       g.ai_suggested ? el('span', {}, `${g.ai_suggested} sugerencias`) : null,
-      g.reclasificado ? el('span', {}, `${g.reclasificado} reclasificadas`) : null),
+      g.reclasificado ? el('span', {}, `${g.reclasificado} reclasificadas`) : null,
+      g.peso_talla ? el('span', {}, `${g.peso_talla} peso-talla`) : null,
+      g.notebooklm ? el('span', {}, `${g.notebooklm} NotebookLM`) : null),
     total ? bar : null,
     el('div', { class: 'meta' },
       el('span', {}, `${g.n_species} especies`),
@@ -368,6 +408,8 @@ function filtersBar(all) {
     ['sin_respaldo', 'Sin respaldo de B6'],
     ['sugerencia_ia', 'Sugerencia IA'],
     ['reclasificado', 'Reclasificadas'],
+    ['peso_talla', 'Peso-talla'],
+    ['notebooklm', 'NotebookLM'],
   ].map(([key, label]) => {
     const n = all.filter((i) => (i.tipo || 'conflicto') === key).length;
     return el('button', {
@@ -378,6 +420,10 @@ function filtersBar(all) {
             ? 'Inferencia taxonómica del modelo, sin respaldo documental: hipótesis a validar'
             : key === 'reclasificado'
             ? 'Valor que ya existía, repartido desde Von_bertalanffy_a/b a la columna que le corresponde'
+            : key === 'peso_talla'
+            ? 'li_a / li_b extraídos del corpus con cita textual, después de corregir la definición que las búsquedas recibieron mal'
+            : key === 'notebooklm'
+            ? 'Leído por NotebookLM en dos notebooks con literatura que el índice FAISS no tiene. Corpus externo: no reproducible desde el repo'
             : 'Dos o más búsquedas dan valores distintos'),
       onclick: () => { f.tipo = key; render(); },
     }, `${label} ${n}`);
@@ -422,7 +468,8 @@ function conflictCard(item) {
     onclick: () => { state.open.has(item.id) ? state.open.delete(item.id) : state.open.add(item.id); renderGroup(); },
   },
     el('div', { class: 'sp' }, item.species, el('div', { class: 'fam' }, [item.family, item.order].filter(Boolean).join(' · '))),
-    el('div', { class: 'pl' }, el('b', {}, item.param_label), item.unit ? ` (${item.unit})` : '',
+    el('div', { class: 'pl', title: item.param_hint || null },
+      el('b', {}, item.param_label), item.unit ? ` (${item.unit})` : '',
       item.critical_param ? el('div', { class: 'fam' }, '★ parámetro clave para Atlantis') : null),
     valueChips(item),
     el('div', { style: 'display:flex;gap:6px;align-items:center' },
@@ -430,6 +477,15 @@ function conflictCard(item) {
         ? el('span', { class: 'badge ia', title: 'Inferencia taxonómica, sin respaldo documental' }, 'sugerencia IA')
         : item.tipo === 'reclasificado'
         ? el('span', { class: 'badge rc', title: 'Valor existente, movido a su columna real' }, 'reclasificada')
+        : item.tipo === 'peso_talla'
+        ? el('span', { class: 'badge lw', title: 'Extraído del corpus con cita textual' }, 'peso-talla')
+        : item.tipo === 'notebooklm'
+        ? el('span', {
+            class: `badge nb${item.nblm_suggestion?.discrepancia ? ' crit' : ''}`,
+            title: item.nblm_suggestion?.discrepancia
+              ? 'Los dos notebooks dan valores distintos'
+              : 'Leído por NotebookLM en un corpus externo al repo',
+          }, item.nblm_suggestion?.discrepancia ? 'NotebookLM · discrepan' : 'NotebookLM')
         : item.tipo === 'sin_respaldo'
         ? el('span', { class: 'badge crit', title: 'B6 no encontró evidencia en el corpus' }, 'sin respaldo')
         : (item.kind === 'num'
@@ -523,6 +579,80 @@ function cardBody(item) {
           + 'búsqueda la resolvió a su manera. Confirma que la cantidad es la que dice.'),
         el('button', { class: 'chip', style: 'margin-top:10px',
           onclick: () => fillDecision(item.id, rc.value, 'reclasificado') }, 'Usar este valor')));
+  }
+
+  // ── peso-talla extraído del corpus ───────────────────────────────────
+  // A diferencia del reparto de esquema, aquí sí hay dato nuevo: un número que
+  // estaba en los papers y que la extracción original tiró por no tener dónde
+  // ponerlo. Lo que se revisa es la cita — que sea de esta especie y que traiga
+  // las unidades de W y L, sin las cuales una «a» no significa nada.
+  const lw = item.lw_suggestion;
+  if (lw) {
+    body.append(
+      el('h4', {}, 'Peso-talla extraído del corpus ',
+        el('span', { class: `conf conf-${lw.confidence}` }, `confianza ${lw.confidence}`)),
+      el('div', { class: 'lw-box' },
+        el('div', {}, el('b', {}, fmt(lw.value, 'num')),
+          el('span', { class: 'hint' }, ` · ${lw.scope}`),
+          lw.unit ? null : el('span', { class: 'badge crit', style: 'margin-left:8px' }, 'sin unidades')),
+        el('div', { class: 'paper-grid', style: 'margin-top:8px' },
+          el('span', { class: 'pk' }, 'Unidades'),
+          el('span', { class: 'pv' }, lw.unit || '— el paper no las declara'),
+          el('span', { class: 'pk' }, 'Fuente'),
+          el('span', { class: 'pv' }, (lw.citations || []).map((c) => c.ref).join(' · ') || '—'),
+          lw.n_records ? el('span', { class: 'pk' }, 'n') : null,
+          lw.n_records ? el('span', { class: 'pv' }, String(lw.n_records)) : null),
+        lw.quote ? el('blockquote', { class: 'quote' }, lw.quote) : null,
+        el('p', { style: 'margin:8px 0 0;font-size:13px;line-height:1.55' }, lw.rationale),
+        el('div', { class: 'hint', style: 'margin-top:10px' },
+          'Extraído del corpus, ', el('b', {}, 'no inferido'),
+          '. Comprueba dos cosas en la cita: que hable de ', el('i', {}, item.species),
+          ' y no de otra especie con el mismo epíteto, y que declare en qué unidades '
+          + 'van W y L — el mismo pez tiene una «a» mil veces distinta según si el '
+          + 'peso va en gramos o kilos.'),
+        el('button', { class: 'chip', style: 'margin-top:10px',
+          onclick: () => fillDecision(item.id, lw.value, 'peso_talla') }, 'Usar este valor')));
+  }
+
+  // ── NotebookLM ───────────────────────────────────────────────────────
+  // El canal más externo: su corpus no está en este repo y la respuesta no se
+  // puede reproducir desde aquí. Por eso la tarjeta no muestra un número, sino
+  // lo que dijo CADA notebook con su frase y su documento. Si discrepan, se ve
+  // primero: esa discrepancia es la información, no un estorbo que promediar.
+  const nb = item.nblm_suggestion;
+  if (nb) {
+    body.append(
+      el('h4', {}, 'NotebookLM ',
+        el('span', { class: `conf conf-${nb.confidence}` }, `confianza ${nb.confidence}`),
+        nb.discrepancia
+          ? el('span', { class: 'badge crit', style: 'margin-left:8px' },
+              `los notebooks discrepan ${Math.round(nb.acuerdo_pct)}%`)
+          : null),
+      el('div', { class: 'nb-box' },
+        el('div', {}, el('b', {}, fmt(nb.value, item.kind)),
+          nb.unit ? el('span', { class: 'hint' }, ` ${nb.unit}`) : null,
+          el('span', { class: 'hint' }, ` · ${nb.scope}`)),
+        el('div', { style: 'margin-top:10px;display:grid;gap:8px' },
+          (nb.notebooks || []).map((src) => el('div', { class: 'nb-src' },
+            el('div', {},
+              el('span', { class: 'nb-alias' }, src.alias),
+              el('b', { style: 'margin-left:8px' }, fmt(src.value, item.kind)),
+              src.unit ? el('span', { class: 'hint' }, ` ${src.unit}`) : null,
+              src.n ? el('span', { class: 'hint' }, ` · n = ${src.n}`) : null,
+              src.scope ? el('span', { class: 'hint' }, ` · ${src.scope}`) : null),
+            el('div', { class: 'hint', style: 'margin-top:4px' },
+              src.source_title
+                ? ['Fuente: ', el('b', {}, src.source_title)]
+                : el('span', { class: 'badge crit' }, 'sin fuente identificada')),
+            src.quote ? el('blockquote', { class: 'quote' }, src.quote) : null))),
+        el('p', { style: 'margin:10px 0 0;font-size:13px;line-height:1.55' }, nb.rationale),
+        el('div', { class: 'hint', style: 'margin-top:10px' },
+          'Corpus externo a este repositorio: ', el('b', {}, 'la respuesta no es reproducible desde aquí'),
+          ' y la librería que la obtiene no es oficial de Google. Lo único '
+          + 'comprobable es la cita — léela antes de aceptar. Un valor «sin fuente '
+          + 'identificada» es una afirmación del asistente, no un dato de la literatura.'),
+        el('button', { class: 'chip', style: 'margin-top:10px',
+          onclick: () => fillDecision(item.id, nb.value, 'NotebookLM') }, 'Usar este valor')));
   }
 
   const ev = item.evidence_b6;
@@ -779,7 +909,9 @@ function askCustom(item) {
 function decisionForm(item) {
   const d = decisionOf(item.id);
   const sources = [...Object.keys(item.values), 'RAG', 'externo',
-                   ...(item.ai_suggestion ? ['IA'] : []), 'manual', 'ninguna'];
+                   ...(item.ai_suggestion ? ['IA'] : []),
+                   ...(item.lw_suggestion ? ['peso_talla'] : []),
+                   ...(item.nblm_suggestion ? ['NotebookLM'] : []), 'manual', 'ninguna'];
 
   const valueInput = el('input', {
     id: `val-${cssId(item.id)}`,
@@ -857,6 +989,9 @@ async function saveDecision(item, status) {
   });
   if (!res.ok) { toast('Error al guardar'); return; }
 
+  // La matriz se calcula en el servidor a partir de las decisiones: acabamos de
+  // cambiar una, así que la copia en memoria ya no vale.
+  state.matrix = null;
   if (status === 'pending') delete state.decisions[item.id];
   else state.decisions[item.id] = { ...payload, updated_at: new Date().toISOString().slice(0, 19) };
   toast(status === 'pending' ? 'Celda reabierta' : `Guardado: ${STATUS_LABEL[status]}`);
@@ -866,19 +1001,27 @@ async function saveDecision(item, status) {
 
 // ── exportación y navegación ───────────────────────────────────────────
 
-async function exportCsv() {
-  const btn = $('#btn-export');
-  btn.disabled = true; btn.textContent = 'Exportando…';
+// Ambos botones regeneran el export y bajan uno de los dos CSV. La matriz es lo
+// que consume Atlantis; la procedencia es la tabla larga con una fila por celda
+// —valor, estado, búsquedas de respaldo, revisor y referencia— que es la que
+// permite auditar de dónde salió cada número.
+async function exportCsv(kind = 'consolidado') {
+  const esProv = kind === 'procedencia';
+  const btn = $(esProv ? '#btn-export-prov' : '#btn-export');
+  const etiqueta = esProv ? 'Tabla completa' : 'Exportar CSV';
+  btn.disabled = true; btn.textContent = esProv ? 'Generando…' : 'Exportando…';
   try {
     const res = await fetch('/api/export', { method: 'POST' });
+    if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     const parts = Object.entries(data.by_status || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
-    toast(`${data.cells} celdas → ${data.csv}  (${parts})`, 6000);
-    window.open('/api/export/download', '_blank');
+    const archivo = esProv ? data.provenance_csv : data.csv;
+    toast(`${data.cells} celdas → ${archivo}  (${parts})`, 6000);
+    window.open(`/api/export/download?kind=${kind}`, '_blank');
   } catch (err) {
     toast('Error al exportar');
   } finally {
-    btn.disabled = false; btn.textContent = 'Exportar CSV';
+    btn.disabled = false; btn.textContent = etiqueta;
   }
 }
 
@@ -887,7 +1030,8 @@ function go(route) {
   state.open.clear();
   location.hash = route.view === 'group' ? `#g=${encodeURIComponent(route.group)}`
     : route.view === 'fbGroup' ? `#fb=${encodeURIComponent(route.group)}`
-    : route.view === 'fb' ? '#fb' : '';
+    : route.view === 'fb' ? '#fb'
+    : route.view === 'matrix' ? '#m' : '';
   render();
   window.scrollTo(0, 0);
 }
@@ -897,6 +1041,7 @@ function readHash() {
   const f = location.hash.match(/^#fb=(.*)$/);
   if (f) state.route = { view: 'fbGroup', group: decodeURIComponent(f[1]) };
   else if (location.hash === '#fb') state.route = { view: 'fb', group: null };
+  else if (location.hash === '#m') state.route = { view: 'matrix', group: null };
   else if (g) state.route = { view: 'group', group: decodeURIComponent(g[1]) };
   else state.route = { view: 'home', group: null };
 }
@@ -906,7 +1051,8 @@ function render() {
   const t = state.queue.totals;
   $('#subtitle').textContent =
     `${t.conflicts} celdas en conflicto · ${t.species} especies · ${state.queue.searches.join('/')} · cola del ${state.queue.generated_at.slice(0, 10)}`;
-  if (state.route.view === 'fb') renderFishbase();
+  if (state.route.view === 'matrix') renderMatrix();
+  else if (state.route.view === 'fb') renderFishbase();
   else if (state.route.view === 'fbGroup') renderFishbaseGroup();
   else if (state.route.view === 'group') renderGroup();
   else renderHome();
@@ -914,7 +1060,8 @@ function render() {
 
 // ── arranque ───────────────────────────────────────────────────────────
 
-$('#btn-export').addEventListener('click', exportCsv);
+$('#btn-export').addEventListener('click', () => exportCsv('consolidado'));
+$('#btn-export-prov').addEventListener('click', () => exportCsv('procedencia'));
 $('#btn-theme').addEventListener('click', () => {
   const now = document.documentElement.getAttribute('data-theme');
   const next = now === 'dark' ? 'light' : 'dark';
@@ -1000,11 +1147,41 @@ async function renderFishbase() {
 
   const kpis = el('div', { class: 'kpis' },
     kpi(t.cells, 'Celdas propuestas', `${f.groups.length} grupos · ${t.species} especies`),
+    kpi(t.region || 0, 'Medidas en la región',
+        'Golfo de California, Pacífico mexicano u oriental'),
     kpi(t.accepted, 'Aceptadas', 'ya son dato al exportar'),
     kpi(t.rejected, 'Descartadas', 'no se escriben en el CSV'),
     kpi(t.cells - t.accepted - t.rejected - (t.locked || 0), 'Sin revisar', 'la celda queda vacía'),
     t.locked ? kpi(t.locked, 'Decididas en la cola',
                    'ya resueltas con otra fuente · FishBase no las toca') : null);
+
+  // El aprobado por procedencia. Vive aquí arriba y no dentro de cada grupo
+  // porque la regla es la misma para todos: si el número se midió en el
+  // sistema que se está modelando, revisarlo celda a celda no añade nada.
+  const panelRegion = el('div', { class: 'region-panel' },
+    el('div', {},
+      el('b', {}, 'Validación por procedencia'),
+      el('div', { class: 'hint', style: 'margin-top:4px;max-width:70ch' },
+        'FishBase guarda dónde se midió cada registro. Cuando hay registros del '
+        + 'Golfo de California, del Pacífico mexicano o del Pacífico oriental, el '
+        + 'valor propuesto se calcula sólo con ellos y la celda se puede aprobar '
+        + 'como validada sin ir al paper: la procedencia ya contesta la pregunta '
+        + 'que hacía falta contestar.')),
+    el('div', { class: 'spacer', style: 'flex:1' }),
+    el('button', {
+      class: 'primary', disabled: state.fbBusy || !t.region_pending,
+      onclick: () => validarRegion({},
+        `¿Aprobar como validadas las ${t.region_pending} celdas medidas en la región?\n\n`
+        + 'Sólo las que traen localidad de medición; las clasificadas por el título '
+        + 'del estudio se quedan pendientes. Las ya resueltas en la cola no se tocan.\n\n'
+        + 'Se puede revertir en bloque con «Deshacer».'),
+    }, `Validar ${t.region_pending || 0} celda(s) por región`),
+    el('button', {
+      class: 'ghost', disabled: state.fbBusy,
+      onclick: () => validarRegion({ deshacer: true },
+        '¿Reabrir todas las celdas aprobadas por procedencia?\n\n'
+        + 'No toca las que aceptaste a mano.'),
+    }, 'Deshacer'));
 
   const filas = f.groups.map((g) => {
     const revisado = g.accepted + g.rejected + (g.locked || 0);
@@ -1012,6 +1189,12 @@ async function renderFishbase() {
       el('td', {}, el('b', {}, g.group)),
       el('td', { class: 'num' }, g.n_species),
       el('td', { class: 'num' }, g.cells),
+      el('td', { class: 'num' }, g.region
+        ? el('span', { class: 'badge region',
+              title: `${g.region} celdas medidas en la región`
+                   + (g.region_pending ? ` · ${g.region_pending} sin aprobar` : ' · todas resueltas') },
+            g.region)
+        : '—'),
       el('td', { class: 'num' }, g.accepted ? el('span', { class: 'badge done' }, g.accepted) : '—'),
       el('td', { class: 'num' }, g.rejected || '—'),
       el('td', { class: 'num' }, g.locked
@@ -1030,11 +1213,14 @@ async function renderFishbase() {
     el('div', { class: 'warn-note', style: 'margin:16px 0' },
       el('b', {}, 'Estos valores no salen del corpus ni los dedujo el modelo. '),
       f.warning || ''),
+    panelRegion,
     el('div', { class: 'tablewrap' },
       el('table', { class: 'fbtable' },
         el('thead', {}, el('tr', {},
           el('th', {}, 'Grupo'), el('th', { class: 'num' }, 'Especies'),
-          el('th', { class: 'num' }, 'Celdas'), el('th', { class: 'num' }, 'Aceptadas'),
+          el('th', { class: 'num' }, 'Celdas'),
+          el('th', { class: 'num', title: 'Con localidad de medición en la región modelada' }, 'Regionales'),
+          el('th', { class: 'num' }, 'Aceptadas'),
           el('th', { class: 'num' }, 'Descartadas'),
           el('th', { class: 'num' }, 'En la cola'),
           el('th', {}, 'Avance'), el('th', {}, ''))),
@@ -1062,6 +1248,8 @@ async function renderFishbaseGroup() {
   const aceptadas = celdas.filter((c) => c.status === 'accepted' && !c.locked).length;
   const descartadas = celdas.filter((c) => c.status === 'rejected' && !c.locked).length;
   const pendientes = celdas.length - aceptadas - descartadas - bloqueadas;
+  const regPend = celdas.filter((c) => c.region && c.region_origin === 'localidad'
+                                    && !c.status && !c.locked).length;
 
   const cabecera = el('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px' },
     el('button', { class: 'ghost', onclick: () => go({ view: 'fb' }) }, '← FishBase'),
@@ -1071,7 +1259,15 @@ async function renderFishbaseGroup() {
       + (bloqueadas ? ` · ${bloqueadas} ya resueltas en la cola` : '')),
     el('div', { class: 'spacer', style: 'flex:1' }),
     el('button', {
-      class: 'primary', disabled: state.fbBusy || !pendientes,
+      class: 'primary', disabled: state.fbBusy || !regPend,
+      title: 'Sólo las celdas cuyo registro se midió en el Golfo de California, '
+           + 'el Pacífico mexicano o el Pacífico oriental',
+      onclick: () => validarRegion({ group },
+        `¿Validar las ${regPend} celdas de «${group}» medidas en la región?\n\n`
+        + 'El valor de cada una ya está calculado sólo con sus registros regionales.'),
+    }, `Validar por región (${regPend})`),
+    el('button', {
+      class: 'ghost', disabled: state.fbBusy || !pendientes,
       onclick: () => decidirFB({ group }, 'accepted',
         `¿Aceptar las ${pendientes} celdas sin revisar de «${group}»?\n\n`
         + 'Se escribirán en el CSV al exportar, cada una con su SpecCode y su '
@@ -1086,7 +1282,7 @@ async function renderFishbaseGroup() {
     }, 'Reabrir el grupo'));
 
   const encabezados = [el('th', {}, 'Especie')]
-    .concat(d.params.map((p) => el('th', { class: 'num' },
+    .concat(d.params.map((p) => el('th', { class: 'num', title: p.hint || null },
       p.label, p.unit ? el('small', {}, ` (${p.unit})`) : null)))
     .concat([el('th', {}, '')]);
 
@@ -1116,6 +1312,12 @@ async function renderFishbaseGroup() {
       + 'la referencia primaria. Verde = aceptada; tachada = descartada.'));
 }
 
+// Marca corta de procedencia en la celda. El nivel importa: un t₀ del Golfo
+// describe el sistema modelado; uno de Perú, el mismo océano bajo otro régimen.
+const SIGLA_REGION = {
+  golfo_california: 'GC', pacifico_mexicano: 'PM', pacifico_oriental: 'PO',
+};
+
 // Una celda de la tabla: valor, cuántos registros lo sostienen y su estado.
 function celdaFB(c) {
   if (!c) return el('td', { class: 'num vacia' }, '—');
@@ -1129,15 +1331,26 @@ function celdaFB(c) {
       el('span', {}, fmt(c.decided_value, 'num')), el('span', { class: 'lockicon' }, '🔒'));
   }
   const clase = `num${c.status === 'accepted' ? ' ok' : c.status === 'rejected' ? ' no' : ''}`;
+  const evid = (c.region_evidence || [])
+    .map((e) => `    ${e.locality || '(sin localidad)'}${e.origen === 'referencia'
+                 ? ` — por el título del estudio: «${e.fragmento}»` : ''}`);
   const detalle = [
     `${c.value}${c.unit ? ' ' + c.unit : ''}`,
     c.observed_range ? `rango observado: ${c.observed_range[0]} – ${c.observed_range[1]}` : null,
     `${c.n_records} registro(s) · confianza ${c.confidence}`,
+    c.region ? `procedencia: ${c.region_label} (${c.region_n} de ${c.region_of} registros)`
+             : 'FishBase no dice dónde se midió',
+    ...evid,
+    c.region && c.value_global != null && c.value_global !== c.value
+      ? `mediana mundial (no se usa): ${c.value_global}` : null,
     ...(c.citations || []).map((x) => x.ref),
   ].filter(Boolean).join('\n');
   return el('td', { class: clase, title: detalle },
     el('span', { class: `fbval conf-${c.confidence}` }, fmt(c.value, 'num')),
     c.n_records > 1 ? el('sup', { class: 'nrec' }, c.n_records) : null,
+    c.region ? el('span', {
+      class: `reg reg-${c.region}${c.region_origin === 'referencia' ? ' weak' : ''}`,
+    }, SIGLA_REGION[c.region] || '·') : null,
     el('div', { class: 'cellbtns' },
       el('button', {
         class: 'mini', title: 'Aceptar esta celda', disabled: state.fbBusy,
@@ -1147,6 +1360,46 @@ function celdaFB(c) {
         class: 'mini', title: 'Descartar esta celda', disabled: state.fbBusy,
         onclick: (e) => { e.stopPropagation(); decidirFB({ ids: [c.id] }, 'rejected', null); },
       }, '✕')));
+}
+
+// Aprobación por procedencia: la regla la aplica el servidor, aquí sólo se
+// pide y se cuenta. Deshacer sólo alcanza a lo que aprobó esta regla.
+async function validarRegion(objetivo, confirmacion) {
+  const reviewer = $('#reviewer').value.trim();
+  if (!objetivo.deshacer && !reviewer) {
+    toast('Escribe tu nombre de revisor arriba'); $('#reviewer').focus(); return;
+  }
+  if (confirmacion && !window.confirm(confirmacion)) return;
+  state.fbBusy = true;
+  try {
+    const r = await fetch('/api/fishbase/validate-region', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...objetivo, reviewer }),
+    });
+    if (!r.ok) {
+      toast(r.status === 404
+        ? 'El servidor no conoce esta ruta todavía: reinícialo'
+        : 'No se pudo validar');
+      return;
+    }
+    const res = await r.json();
+    if (res.undone) {
+      toast(`${res.cells} celda(s) reabiertas`);
+    } else {
+      const detalle = Object.entries(res.by_level || {})
+        .map(([k, v]) => `${SIGLA_REGION[k] || k}=${v}`).join(' · ');
+      toast(`${res.cells} celda(s) validadas por procedencia`
+            + (detalle ? ` (${detalle})` : '')
+            + (res.skipped ? ` · ${res.skipped} intactas (ya resueltas en la cola)` : ''));
+      localStorage.setItem('reviewer', reviewer);
+    }
+    state.fb = null;
+    state.fbGroup = null;
+    state.matrix = null;
+  } finally {
+    state.fbBusy = false;
+  }
+  render();
 }
 
 async function decidirFB(objetivo, status, confirmacion) {
@@ -1170,8 +1423,203 @@ async function decidirFB(objetivo, status, confirmacion) {
     localStorage.setItem('reviewer', reviewer);
     state.fb = null;            // los contadores del índice cambiaron
     state.fbGroup = null;       // y la tabla también
+    state.matrix = null;        // y lo que se exportaría
   } finally {
     state.fbBusy = false;
   }
   render();
+}
+
+// ── página de todos los parámetros ─────────────────────────────────────
+// Las otras vistas miran una celda a la vez: son para decidir. Ésta es para
+// ver. Una fila por especie, una columna por parámetro, y el estado de
+// procedencia en el color — que es la pregunta que el modelador se hace antes
+// de alimentar Atlantis: ¿de dónde salió cada número, y cuánto falta?
+//
+// El valor y su estado salen de la MISMA consolidate() que escribe el CSV, así
+// que esta tabla no es un resumen aparte que pueda desincronizarse: es lo que
+// se exportaría si se pulsara «Exportar CSV» ahora mismo.
+
+// Estado de procedencia → cómo se pinta y qué significa. El orden es el de la
+// leyenda, de más respaldado a menos.
+const ESTADOS = {
+  acuerdo:                  { cls: 'st-ok',     lbl: 'Acuerdo entre búsquedas' },
+  validado_region:          { cls: 'st-ok',     lbl: 'Validado · medido en la región' },
+  validado_region_cita:     { cls: 'st-rev',    lbl: 'Validado · literatura de la región' },
+  revisado:                 { cls: 'st-rev',    lbl: 'Revisado' },
+  revisado_fuente_externa:  { cls: 'st-rev',    lbl: 'Revisado · fuente externa' },
+  revisado_fishbase:        { cls: 'st-rev',    lbl: 'Revisado · FishBase' },
+  revisado_sugerencia_ia:   { cls: 'st-rev',    lbl: 'Revisado · sugerencia de IA' },
+  revisado_reclasificacion: { cls: 'st-rev',    lbl: 'Revisado · reparto de esquema' },
+  revisado_peso_talla:      { cls: 'st-rev',    lbl: 'Revisado · peso-talla del corpus' },
+  revisado_notebooklm:      { cls: 'st-rev',    lbl: 'Revisado · NotebookLM' },
+  sin_corroborar:           { cls: 'st-solo',   lbl: 'Una sola búsqueda' },
+  conflicto_pendiente:      { cls: 'st-confl',  lbl: 'Discrepan · consenso provisional' },
+  sin_respaldo_b6:          { cls: 'st-norsp',  lbl: 'Sin respaldo de B6' },
+  conflicto_sin_consenso:   { cls: 'st-vacia',  lbl: 'Empate: requiere decisión' },
+  descartado:               { cls: 'st-vacia',  lbl: 'Descartado por el revisor' },
+  fishbase_pendiente:       { cls: 'st-pend',   lbl: 'Propuesto · FishBase' },
+  fishbase_rechazado:       { cls: 'st-vacia',  lbl: 'FishBase rechazado' },
+  sugerencia_ia_pendiente:  { cls: 'st-pend',   lbl: 'Propuesto · IA' },
+  reclasificado_pendiente:  { cls: 'st-pend',   lbl: 'Propuesto · reparto de esquema' },
+  peso_talla_pendiente:     { cls: 'st-pend',   lbl: 'Propuesto · peso-talla del corpus' },
+  notebooklm_pendiente:     { cls: 'st-pend',   lbl: 'Propuesto · NotebookLM' },
+};
+const estadoDe = (s) => ESTADOS[s] || { cls: 'st-pend', lbl: s };
+const esPendiente = (s) => estadoDe(s).cls === 'st-pend';
+
+let matrixError = null;
+
+async function loadMatrix() {
+  const r = await fetch('/api/matrix');
+  if (!r.ok) {
+    matrixError = r.status === 404
+      ? 'El servidor no conoce /api/matrix. Reinícialo para que cargue las rutas nuevas:\n'
+        + '  ./scripts/phase_7_review/run_review.sh 8600'
+      : `El servidor respondió ${r.status} al pedir /api/matrix.`;
+    return;
+  }
+  matrixError = null;
+  state.matrix = await r.json();
+}
+
+function filasMatrix() {
+  const f = state.mx;
+  const needle = f.q.trim().toLowerCase();
+  return state.matrix.rows.filter((r) => {
+    if (f.group && r.group !== f.group) return false;
+    if (f.soloConDato && !Object.values(r.cells).some((c) => c.value !== null)) return false;
+    if (needle) {
+      const hay = `${r.species} ${r.group} ${r.family} ${r.genus} ${r.order} ${r.class}`.toLowerCase();
+      if (!hay.includes(needle)) return false;
+    }
+    return true;
+  });
+}
+
+async function renderMatrix() {
+  if (!state.matrix) {
+    $('#view').replaceChildren(el('p', { class: 'hint' }, 'Construyendo la tabla…'));
+    await loadMatrix();
+    if (!state.matrix) {
+      $('#view').replaceChildren(el('div', {},
+        el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:16px' },
+          el('button', { class: 'ghost', onclick: () => go({ view: 'home' }) }, '← Volver'),
+          el('h2', { style: 'margin:0;font-size:18px' }, 'No se pudo cargar la tabla')),
+        el('div', { class: 'warn-note' },
+          el('pre', { style: 'white-space:pre-wrap;margin:0;font-size:12px' }, matrixError))));
+      return;
+    }
+  }
+
+  const m = state.matrix;
+  const params = Object.entries(m.params);
+  const filas = filasMatrix();
+  const visibles = filas.flatMap((r) => Object.values(r.cells));
+  const conDato = visibles.filter((c) => c.value !== null).length;
+  const pendientes = visibles.filter((c) => esPendiente(c.status)).length;
+  const cobertura = filas.length * params.length;
+
+  const cabecera = el('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px' },
+    el('button', { class: 'ghost', onclick: () => go({ view: 'home' }) }, '← Portada'),
+    el('h2', { style: 'margin:0;font-size:18px' }, 'Todos los parámetros encontrados'),
+    el('span', { class: 'hint' },
+      `${filas.length} especies · ${conDato} celdas con dato de ${cobertura} posibles `
+      + `(${cobertura ? Math.round(conDato / cobertura * 100) : 0} %)`
+      + (state.mx.verPendientes ? ` · ${pendientes} propuestas sin aceptar` : '')));
+
+  const grupos = [...new Set(m.rows.map((r) => r.group))].sort();
+  const filtros = el('div', { class: 'filters' },
+    el('select', { onchange: (e) => { state.mx.group = e.target.value; renderMatrix(); } },
+      el('option', { value: '', selected: !state.mx.group }, `Todos los grupos (${grupos.length})`),
+      ...grupos.map((g) => el('option', { value: g, selected: state.mx.group === g }, g))),
+    el('input', {
+      placeholder: 'Especie, género, familia…', value: state.mx.q,
+      // Repintar diecisiete mil celdas en cada tecla se siente como un tirón:
+      // se espera a que el revisor deje de escribir.
+      oninput: (e) => {
+        state.mx.q = e.target.value;
+        clearTimeout(renderMatrix._t);
+        renderMatrix._t = setTimeout(() => {
+          renderMatrix();
+          const caja = $('.filters input[placeholder^="Especie"]');
+          if (caja) { caja.focus(); caja.setSelectionRange(caja.value.length, caja.value.length); }
+        }, 220);
+      },
+    }),
+    chk('Mostrar propuestas sin aceptar', state.mx.verPendientes,
+        (v) => { state.mx.verPendientes = v; renderMatrix(); }),
+    chk('Sólo especies con algún dato', state.mx.soloConDato,
+        (v) => { state.mx.soloConDato = v; renderMatrix(); }));
+
+  // Leyenda: sin ella la tabla es un campo de colores sin clave, y el color es
+  // justamente lo que la hace útil.
+  const vistos = new Set(visibles.map((c) => c.status));
+  const leyenda = el('div', { class: 'mx-leyenda' },
+    ...Object.entries(ESTADOS)
+      .filter(([k]) => vistos.has(k) && (state.mx.verPendientes || !esPendiente(k)))
+      .map(([k, v]) => el('span', { class: 'mx-lg' },
+        el('i', { class: `mx-sw ${v.cls}` }), v.lbl)));
+
+  const encabezados = [
+    el('th', { class: 'mx-sticky mx-g' }, 'Grupo'),
+    el('th', { class: 'mx-sticky mx-s' }, 'Especie'),
+    ...params.map(([key, p]) => el('th', { class: 'num', title: p.hint || key },
+      p.label, p.unit ? el('small', {}, ` (${p.unit})`) : null)),
+  ];
+
+  const cuerpo = filas.map((r) => el('tr', {},
+    el('td', { class: 'mx-sticky mx-g' },
+      el('button', {
+        class: 'linkish', title: `Ir a la cola de revisión de «${r.group}»`,
+        onclick: () => go({ view: 'group', group: r.group }),
+      }, r.group)),
+    el('td', { class: 'mx-sticky mx-s sp' }, r.species,
+      r.family ? el('div', { class: 'fam' }, r.family) : null),
+    ...params.map(([key, p]) => celdaMx(r.cells[key], p))));
+
+  $('#view').replaceChildren(
+    cabecera, filtros, leyenda,
+    filas.length
+      ? el('div', { class: 'tablewrap mx-wrap' },
+          el('table', { class: 'fbtable mxtable' },
+            el('thead', {}, el('tr', {}, ...encabezados)),
+            el('tbody', {}, cuerpo)))
+      : el('p', { class: 'hint' }, 'Ninguna especie coincide con el filtro.'),
+    el('p', { class: 'hint', style: 'margin-top:14px' },
+      'El valor y su color salen de la misma consolidación que escribe el CSV: '
+      + 'esto es lo que se exportaría ahora mismo. Las propuestas sin aceptar van '
+      + 'en gris y entre paréntesis — no están en el CSV, y no lo estarán hasta '
+      + 'que alguien las revise. Pasa el cursor sobre una celda para ver de dónde '
+      + 'sale.'));
+}
+
+function chk(label, valor, onchange) {
+  const input = el('input', { type: 'checkbox', checked: valor || null,
+                              onchange: (e) => onchange(e.target.checked) });
+  return el('label', { class: 'mx-chk' }, input, label);
+}
+
+function celdaMx(c, meta) {
+  if (!c) return el('td', { class: 'num vacia' }, '·');
+  const est = estadoDe(c.status);
+  const pend = esPendiente(c.status);
+
+  if (pend && !state.mx.verPendientes) return el('td', { class: 'num vacia' }, '·');
+
+  const detalle = [
+    `${meta.label}${meta.unit ? ` (${meta.unit})` : ''}`,
+    meta.hint || null,
+    est.lbl,
+    c.value !== null ? `valor: ${c.value}` : (c.proposed !== null ? `propuesto: ${c.proposed}` : null),
+    c.searches ? `búsquedas: ${c.searches}` : null,
+    c.reviewer ? `revisor: ${c.reviewer}` : null,
+    c.note || null,
+  ].filter(Boolean).join('\n');
+
+  if (c.value === null) {
+    const texto = c.proposed === null || c.proposed === undefined ? '—' : `(${fmt(c.proposed, meta.type)})`;
+    return el('td', { class: `num ${est.cls}`, title: detalle }, texto);
+  }
+  return el('td', { class: `num ${est.cls}`, title: detalle }, fmt(c.value, meta.type));
 }

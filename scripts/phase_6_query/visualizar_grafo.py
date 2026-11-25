@@ -33,6 +33,10 @@ ENTITY_COLORS = {
     "Concept":  "#9b59b6",   # morado
     "Author":   "#e74c3c",   # rojo
     "Paper":    "#f1c40f",   # amarillo
+    # Tipos del grafo de parámetros (build_parameter_graph.py)
+    "Parameter":       "#1abc9c",   # turquesa
+    "FunctionalGroup": "#8e44ad",   # violeta
+    "Taxon":           "#34495e",   # gris azulado
 }
 
 RELATION_COLORS = {
@@ -42,6 +46,11 @@ RELATION_COLORS = {
     "measured_by":    "#3498db",
     "published_in":   "#f39c12",
     "co_occurs_with": "#9b59b6",
+    # Relaciones del grafo de parámetros
+    "has_parameter":    "#1abc9c",
+    "belongs_to_group": "#8e44ad",
+    "classified_as":    "#34495e",
+    "cited_in":         "#f1c40f",
 }
 
 DEFAULT_COLOR = "#95a5a6"

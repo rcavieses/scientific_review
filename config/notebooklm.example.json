@@ -1,0 +1,37 @@
+{
+  "_comentario": [
+    "Copia este archivo a config/notebooklm.json y pon los ids reales.",
+    "Los ids salen de: python3 scripts/phase_7_review/nblm_client.py --listar",
+    "params_covered declara QUÉ parámetros tiene sentido preguntarle a cada",
+    "notebook. Preguntar de más gasta cuota y produce respuestas educadas sin",
+    "respaldo. Las claves válidas son las de PARAMS en build_review_queue.py.",
+    "prioridad desempata cuando los dos notebooks discrepan (1 gana)."
+  ],
+  "notebooks": [
+    {
+      "id": "PON-AQUI-EL-ID-DEL-PRIMER-NOTEBOOK",
+      "alias": "informes_tecnicos",
+      "prioridad": 1,
+      "params_covered": [
+        "natural_mortality",
+        "growth_rate",
+        "vb_Linf",
+        "vb_t0",
+        "max_age",
+        "age_first_maturity"
+      ]
+    },
+    {
+      "id": "PON-AQUI-EL-ID-DEL-SEGUNDO-NOTEBOOK",
+      "alias": "literatura_gris_goc",
+      "prioridad": 2,
+      "params_covered": [
+        "biomass_mt",
+        "abundance_numbers",
+        "mean_body_size",
+        "Lmax",
+        "larval_duration"
+      ]
+    }
+  ]
+}

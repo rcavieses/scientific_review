@@ -44,6 +44,10 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(HERE))          # para importar build_review_queue
 
+import ai_autovalidate                 # noqa: E402  (necesita el sys.path de arriba)
+import fb_autovalidate                 # noqa: E402
+import fb_region                       # noqa: E402
+
 STATIC_DIR = HERE / "static"
 REVIEW_DIR = PROJECT_ROOT / "outputs" / "review"
 QUEUE_FILE = REVIEW_DIR / "review_queue.json"
@@ -300,6 +304,11 @@ def build_question(item: dict) -> str:
     label, unit = item["param_label"], item["unit"]
     candidates = ", ".join(f"{k}={v}" for k, v in item["values"].items())
     unit_txt = f" (unidades: {unit})" if unit else ""
+    # Parámetros cuyo nombre corto no basta para que el modelo sepa qué buscar:
+    # «a» a secas no dice nada, y confundirla con von Bertalanffy es el error
+    # que dejó li_a/li_b vacíos en las seis búsquedas.
+    hint = item.get("param_hint")
+    hint_txt = f" ({hint})" if hint else ""
 
     if item["kind"] == "cat":
         return (
@@ -312,7 +321,8 @@ def build_question(item: dict) -> str:
         )
     return (
         f"For the species {species} ({item.get('family') or 'n/a'}) in the Gulf of California: "
-        f"what value does the literature report for {label} ({item['param']}){unit_txt}? "
+        f"what value does the literature report for {label} ({item['param']}){unit_txt}"
+        f"{hint_txt}? "
         f"Report the exact figure, its units, the study area and the paper it comes from. "
         f"Different extraction runs disagree: {candidates}. "
         f"State which of those values (if any) the documents actually support, and flag any "
@@ -548,7 +558,8 @@ def fb_param_meta() -> list[dict]:
     """Orden y etiquetas de las columnas de la tabla, según el esquema del modelo."""
     from build_review_queue import PARAMS
     from fishbase_suggestions import PARAM_MAP
-    return [{"key": k, "label": PARAMS[k]["label"], "unit": PARAMS[k]["unit"]}
+    return [{"key": k, "label": PARAMS[k]["label"], "unit": PARAMS[k]["unit"],
+             "hint": PARAMS[k].get("hint")}
             for k in PARAMS if k in PARAM_MAP]
 
 
@@ -562,21 +573,30 @@ def api_fishbase_index():
         g = por_grupo.setdefault(sug["group"], {
             "group": sug["group"], "cells": 0, "species": set(),
             "accepted": 0, "rejected": 0, "pending": 0, "locked": 0,
+            "region": 0, "region_pending": 0,
         })
         g["cells"] += 1
         g["species"].add(sug["species"])
         d = decisions.get(item_id) or {}
         st, src = d.get("status"), d.get("source")
+        # Regional «fuerte»: medido en la región, no sólo citado por un estudio
+        # de la región. Es lo que se puede aprobar en lote sin ir al paper.
+        regional = bool(sug.get("region")) and sug.get("region_origin") == "localidad"
         if st in ("accepted", "rejected") and src != "FishBase":
             # Ya se decidió en la cola de revisión, con otra fuente. Es una
             # decisión humana sobre esa celda y FishBase no puede pisarla.
             g["locked"] += 1
+            regional = False
         elif st == "accepted":
             g["accepted"] += 1
         elif st == "rejected":
             g["rejected"] += 1
         else:
             g["pending"] += 1
+            if regional:
+                g["region_pending"] += 1
+        if regional:
+            g["region"] += 1
     grupos = []
     for g in por_grupo.values():
         g["n_species"] = len(g.pop("species"))
@@ -587,6 +607,7 @@ def api_fishbase_index():
         "source": fb.get("source"),
         "warning": fb.get("warning"),
         "params": fb_param_meta(),
+        "region_levels": fb.get("region_levels", {}),
         "groups": grupos,
         "totals": {
             "cells": sum(g["cells"] for g in grupos),
@@ -594,6 +615,8 @@ def api_fishbase_index():
             "rejected": sum(g["rejected"] for g in grupos),
             "locked": sum(g["locked"] for g in grupos),
             "species": sum(g["n_species"] for g in grupos),
+            "region": sum(g["region"] for g in grupos),
+            "region_pending": sum(g["region_pending"] for g in grupos),
         },
     }
 
@@ -622,11 +645,21 @@ def api_fishbase_group(group: str):
             "observed_range": sug.get("observed_range"),
             "citations": sug.get("citations", []),
             "rationale": sug.get("rationale", ""),
+            # Procedencia geográfica del valor: de dónde salió y con cuántos
+            # registros de la región se calculó.
+            "region": sug.get("region"),
+            "region_label": sug.get("region_label"),
+            "region_origin": sug.get("region_origin"),
+            "region_n": sug.get("region_n", 0),
+            "region_of": sug.get("region_of", 0),
+            "region_evidence": sug.get("region_evidence", []),
+            "value_global": sug.get("value_global"),
             "status": d.get("status"),
             "source": d.get("source"),
             "locked": d.get("status") in ("accepted", "rejected") and d.get("source") != "FishBase",
             "decided_value": d.get("value"),
             "reviewer": d.get("reviewer", ""),
+            "auto_region": bool(d.get(fb_autovalidate.MARCA)),
         }
     if not filas:
         raise HTTPException(404, f"Sin sugerencias de FishBase para «{group}»")
@@ -711,16 +744,63 @@ def api_fishbase_decide(body: FBBulk):
             "skipped": len(saltadas), "skipped_detail": saltadas[:20]}
 
 
+class FBRegion(BaseModel):
+    reviewer: str = ""
+    nivel: str = "pacifico_oriental"     # hasta qué cuenca se acepta
+    incluir_referencia: bool = False     # también las clasificadas sólo por el título
+    group: Optional[str] = None          # un grupo, o todos si va vacío
+    deshacer: bool = False
+
+
+@app.post("/api/fishbase/validate-region")
+def api_fishbase_validate_region(body: FBRegion):
+    """Aprueba en lote las celdas cuya procedencia es la región modelada.
+
+    Es la misma regla que aplica `fb_autovalidate.py` desde la terminal, y deja
+    el mismo sello, para que revertirlo sea una sola operación se haya hecho
+    desde donde se haya hecho.
+    """
+    with _write_lock:
+        decisions = load_json(DECISIONS_FILE, {})
+        if body.deshacer:
+            n = fb_autovalidate.deshacer(decisions, body.group)
+            save_json(DECISIONS_FILE, decisions)
+            return {"ok": True, "cells": n, "undone": True}
+
+        if not body.reviewer.strip():
+            raise HTTPException(400, "hace falta el nombre del revisor")
+        if body.nivel not in fb_region.NIVELES:
+            raise HTTPException(400, f"nivel debe ser uno de {list(fb_region.NIVELES)}")
+        sug = load_fb().get("suggestions", {})
+        origenes = ("localidad", "referencia") if body.incluir_referencia else ("localidad",)
+        elegibles, bloqueadas = fb_autovalidate.seleccionar(
+            sug, decisions, nivel=body.nivel, origenes=origenes, group=body.group)
+        fb_autovalidate.aplicar(elegibles, decisions, body.reviewer.strip(), body.nivel)
+        save_json(DECISIONS_FILE, decisions)
+    por_nivel: dict[str, int] = {}
+    for s in elegibles.values():
+        por_nivel[s["region"]] = por_nivel.get(s["region"], 0) + 1
+    return {"ok": True, "cells": len(elegibles), "by_level": por_nivel,
+            "skipped": len(bloqueadas), "skipped_detail": bloqueadas[:20]}
+
+
 @app.get("/api/status")
 def api_status():
     queue = get_queue()
     decisions = load_json(DECISIONS_FILE, {})
-    reviewed = sum(1 for d in decisions.values() if d.get("status") in {"accepted", "rejected"})
+    # Sólo cuenta lo que está EN la cola: `decisions.json` guarda también las
+    # celdas resueltas en la página de FishBase, y mezclarlas con el tamaño de
+    # la cola daba «revisado» mayor que el total.
+    en_cola = {item["id"] for item in queue["items"]}
+    resueltas = {i for i, d in decisions.items()
+                 if d.get("status") in {"accepted", "rejected"}}
+    reviewed = len(resueltas & en_cola)
     return {
         "queue_generated_at": queue.get("generated_at"),
         "conflicts": queue["totals"]["conflicts"],
         "reviewed": reviewed,
         "pending": queue["totals"]["conflicts"] - reviewed,
+        "reviewed_outside_queue": len(resueltas - en_cola),
         "rag_engines_loaded": [k for k in _engines if not k.startswith("_")],
         "index_chunks": getattr(_index_stats, "total_chunks", None),
     }
@@ -745,6 +825,10 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
     # FishBase ya no pasa por la cola: se revisa en su propia página. El export
     # tiene que mirarlo aparte o las aceptaciones por lote no llegarían al CSV.
     fb_sug = load_json(FB_FILE, {}).get("suggestions", {})
+    # Las sugerencias de IA sí van en la cola, pero no todas: la cola omite las
+    # filas cuya taxonomía no se pudo verificar. Una aceptada fuera de la cola
+    # se perdía en silencio, que es el mismo fallo que ya se corrigió arriba.
+    ai_sug = load_json(REVIEW_DIR / "ai_suggestions.json", {}).get("suggestions", {})
 
     frames = {k: pd.read_csv(PROJECT_ROOT / "data" / "output"
                              / f"Atlantis_GOC_parametros_biologicos_{v}.csv")
@@ -774,26 +858,52 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
             # tomada sobre una sugerencia (IA, FishBase o reclasificación).
             # Descartarla aquí dejaba el canal de revisión sin efecto: el
             # revisor aceptaba el valor y no aparecía nunca en el CSV.
-            if not raw and item_id not in conflicts and item_id not in fb_sug:
+            if not raw and item_id not in conflicts and item_id not in fb_sug \
+                    and item_id not in ai_sug:
                 continue
 
             item = conflicts.get(item_id)
             decision = decisions.get(item_id)
             fbs = fb_sug.get(item_id)
+            ais = ai_sug.get(item_id)
 
-            if fbs and decision and decision["status"] == "accepted" \
+            if ais and not item and decision and decision["status"] == "accepted" \
+                    and decision.get("source") == "IA":
+                # Sugerencia de IA aceptada sobre una celda que la cola no
+                # llegó a incluir. Mismo tratamiento que dentro de la cola.
+                value = norm_num(decision["value"]) if kind == "num" else decision["value"]
+                status = ("validado_region_cita" if decision.get(ai_autovalidate.MARCA)
+                          else "revisado_sugerencia_ia")
+                refs = [c["ref"] for c in ais.get("citations", [])]
+                note = " · ".join(x for x in (decision.get("comment", ""),
+                                              "cita: " + " | ".join(refs) if refs else "") if x)
+            elif fbs and decision and decision["status"] == "accepted" \
                     and decision.get("source") == "FishBase":
                 # Celda aceptada en la página de FishBase, fuera de la cola.
                 value = norm_num(decision["value"]) if kind == "num" else decision["value"]
-                status = "revisado_fishbase"
+                # Un valor validado por procedencia no es lo mismo que uno
+                # aceptado a ojo: el CSV lo dice, porque es la diferencia entre
+                # «alguien lo dio por bueno» y «se midió en el sistema modelado».
+                status = ("validado_region" if fbs.get("region")
+                          and decision.get(fb_autovalidate.MARCA)
+                          else "revisado_fishbase")
                 marca = f"FishBase SpecCode {fbs.get('speccode')}"
                 if fbs.get("n_records", 0) > 1:
                     marca += f", mediana de {fbs['n_records']} registros"
+                if fbs.get("region"):
+                    marca += (f", procedencia {fbs['region_label']} "
+                              f"({fbs.get('region_n')} de {fbs.get('region_of')} registros)")
                 refs = [c["ref"] for c in fbs.get("citations", [])]
                 note = " · ".join(x for x in (decision.get("comment", ""), marca,
                                               "cita: " + " | ".join(refs) if refs else "") if x)
-            elif fbs and not raw and not (decision and decision["status"] == "accepted"):
+            elif fbs and not raw and not (decision and decision["status"] == "accepted") \
+                    and not (item and item.get("tipo") in ("peso_talla", "notebooklm")):
                 # Propuesta de FishBase sin aceptar: no se escribe valor.
+                # Excepción: si el corpus dio ese mismo parámetro con cita textual
+                # (canal peso-talla), manda el corpus. FishBase es una mediana
+                # mundial; la cita es de un paper del Golfo, que es el sistema que
+                # se está modelando. Las dos siguen sin escribirse hasta que
+                # alguien acepte, pero la que se muestra pendiente es la del corpus.
                 provenance.append({
                     "row": idx, "Species": base.at[idx, "Species"], "Group": base.at[idx, "Group"],
                     "param": param, "value": None,
@@ -801,6 +911,7 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                               else "fishbase_pendiente",
                     "n_searches": 0, "spread_pct": 0.0, "searches": "",
                     "reviewer": (decision or {}).get("reviewer", ""),
+                    "proposed": fbs["value"],
                     "note": f"propuesto: {fbs['value']} · FishBase SpecCode {fbs.get('speccode')}",
                 })
                 continue
@@ -809,10 +920,24 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                 status = {"externo": "revisado_fuente_externa",
                           "IA": "revisado_sugerencia_ia",
                           "FishBase": "revisado_fishbase",
-                          "reclasificado": "revisado_reclasificacion"}.get(
+                          "reclasificado": "revisado_reclasificacion",
+                          "peso_talla": "revisado_peso_talla",
+                          "NotebookLM": "revisado_notebooklm"}.get(
                               decision.get("source"), "revisado")
                 note = " · ".join(x for x in (decision.get("reference", ""),
                                               decision.get("comment", "")) if x)
+                if decision.get("source") == "NotebookLM":
+                    # El corpus de NotebookLM no está en este repo: el export es
+                    # el único sitio donde queda constancia de qué documento lo
+                    # sostiene y de si los dos notebooks coincidían. Sin eso, el
+                    # valor sería irrastreable para quien reciba el dataset.
+                    nbs = item.get("nblm_suggestion") or {}
+                    marca = nbs.get("scope", "NotebookLM")
+                    if nbs.get("discrepancia"):
+                        marca += " · LOS NOTEBOOKS DISCREPABAN"
+                    refs = [c["ref"] for c in nbs.get("citations", [])]
+                    note = " · ".join(x for x in (note, marca,
+                                                  "cita: " + " | ".join(refs) if refs else "") if x)
                 if decision.get("source") == "IA":
                     # Una sugerencia aceptada viaja al export con la cita que la
                     # respalda: si el valor sale del conocimiento del modelo, el
@@ -820,6 +945,12 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                     refs = [c["ref"] for c in (item.get("ai_suggestion") or {}).get("citations", [])]
                     if refs:
                         note = " · ".join(x for x in (note, "cita: " + " | ".join(refs)) if x)
+                    if decision.get(ai_autovalidate.MARCA):
+                        # Estado propio, distinto del de FishBase: allí el valor
+                        # se midió en la región; aquí lo que es regional es la
+                        # literatura que sostiene la afirmación. El valor sigue
+                        # siendo una inferencia taxonómica.
+                        status = "validado_region_cita"
                 if decision.get("source") == "FishBase":
                     # Igual que arriba, pero el valor no lo dedujo el modelo: lo
                     # publicó alguien y FishBase lo catalogó. El export conserva
@@ -857,7 +988,9 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                     value = Counter(independent.values()).most_common(1)[0][0]
                 status = "sin_respaldo_b6"
                 note = f"{len(independent)} búsqueda(s) lo afirman; B6 no halló evidencia en el corpus"
-            elif item and item.get("tipo") in ("sugerencia_ia", "fishbase", "reclasificado"):
+            elif item and item.get("tipo") in ("sugerencia_ia", "fishbase",
+                                               "reclasificado", "peso_talla",
+                                               "notebooklm"):
                 # Sugerencia sin revisar. NO se escribe valor: una sugerencia sólo
                 # se convierte en dato cuando un humano la acepta. Queda la fila
                 # de procedencia para que se vea que está pendiente.
@@ -867,7 +1000,8 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
                     "status": f"{item['tipo']}_pendiente",
                     "n_searches": len(raw), "spread_pct": 0.0,
                     "searches": ";".join(f"{k}={v}" for k, v in raw.items()),
-                    "reviewer": "", "note": f"propuesto: {item['suggested']} · {item['suggested_method']}",
+                    "reviewer": "", "proposed": item["suggested"],
+                    "note": f"propuesto: {item['suggested']} · {item['suggested_method']}",
                 })
                 continue
             elif item:
@@ -916,6 +1050,60 @@ def consolidate() -> tuple[pd.DataFrame, pd.DataFrame]:
     return out, pd.DataFrame(provenance)
 
 
+@app.get("/api/matrix")
+def api_matrix():
+    """La tabla completa: un renglón por especie, una columna por parámetro.
+
+    Sale de la misma `consolidate()` que el CSV —no de una lectura paralela—,
+    así que lo que se ve aquí es exactamente lo que se exportaría ahora mismo.
+    Junto al valor viaja su estado de procedencia, y las celdas vacías llevan la
+    sugerencia sin aceptar (FishBase, IA, peso-talla, reclasificación) para que
+    se vea cuánta cobertura hay pendiente de una decisión humana.
+    """
+    consolidated, provenance = consolidate()
+    from build_review_queue import PARAMS, TAXONOMY
+
+    cells: dict[int, dict] = {}
+    for rec in provenance.to_dict("records"):
+        value = rec.get("value")
+        proposed = rec.get("proposed")
+        cells.setdefault(int(rec["row"]), {})[rec["param"]] = {
+            "value": None if value is None or pd.isna(value) else value,
+            "proposed": None if proposed is None or pd.isna(proposed) else proposed,
+            "status": rec["status"],
+            "note": rec.get("note") or "",
+            "reviewer": rec.get("reviewer") or "",
+            "searches": rec.get("searches") or "",
+        }
+
+    rows = []
+    for idx in range(len(consolidated)):
+        mine = cells.get(idx, {})
+        if not mine:
+            continue                      # especie sin una sola celda: no ocupa fila
+        rows.append({
+            "row": idx,
+            **{col.lower(): (None if pd.isna(consolidated.at[idx, col])
+                             else str(consolidated.at[idx, col])) for col in TAXONOMY},
+            "cells": mine,
+        })
+
+    counts = Counter(c["status"] for r in rows for c in r["cells"].values())
+    con_dato = sum(1 for r in rows for c in r["cells"].values() if c["value"] is not None)
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "params": PARAMS,
+        "rows": rows,
+        "totals": {
+            "species_with_cells": len(rows),
+            "species_total": int(len(consolidated)),
+            "cells_with_value": con_dato,
+            "cells_pending": int(len(provenance)) - con_dato,
+            "by_status": dict(counts),
+        },
+    }
+
+
 @app.post("/api/export")
 def api_export():
     consolidated, provenance = consolidate()
@@ -933,10 +1121,40 @@ def api_export():
 
 
 @app.get("/api/export/download")
-def api_export_download():
-    if not EXPORT_CSV.exists():
-        raise HTTPException(404, "Aún no se ha generado el CSV consolidado")
-    return FileResponse(EXPORT_CSV, filename=EXPORT_CSV.name, media_type="text/csv")
+def api_export_download(kind: str = "consolidado"):
+    """Descarga uno de los dos CSV que produce `consolidate()`.
+
+    `consolidado` es la matriz —una fila por especie, una columna por parámetro—
+    y es lo que consume el modelo Atlantis. `procedencia` es la tabla larga: una
+    fila por celda con su valor, su estado, cuántas búsquedas lo respaldan, el
+    revisor y la referencia externa. La segunda es la que hace auditable a la
+    primera, así que tiene que poder bajarse por separado.
+    """
+    destinos = {"consolidado": EXPORT_CSV, "procedencia": EXPORT_PROV}
+    if kind not in destinos:
+        raise HTTPException(400, f"kind debe ser uno de {sorted(destinos)}")
+    ruta = destinos[kind]
+    if not ruta.exists():
+        raise HTTPException(404, f"Aún no se ha generado el CSV de {kind}")
+    return FileResponse(ruta, filename=ruta.name, media_type="text/csv")
+
+
+@app.get("/")
+def index():
+    """Sirve la portada con las URL de `app.js` y `styles.css` versionadas.
+
+    Sin esto, el navegador se quedaba con la copia en caché: tras corregir un
+    cálculo en el JS, el tablero seguía enseñando el número viejo y no había
+    forma de saber desde la página si se estaba mirando código antiguo. El sello
+    es la fecha de modificación del archivo, así que cambia solo.
+    """
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for asset in ("app.js", "styles.css"):
+        ruta = STATIC_DIR / asset
+        if ruta.exists():
+            html = html.replace(f'"{asset}"', f'"{asset}?v={int(ruta.stat().st_mtime)}"')
+    return Response(html, media_type="text/html",
+                    headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

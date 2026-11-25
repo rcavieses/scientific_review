@@ -63,9 +63,11 @@ class RAGQueryEngine:
         llm_provider: Optional[LLMProvider] = None,
         client=None,
         system_prompt: Optional[str] = None,
+        thinking: Optional[dict] = None,
     ):
         self.vector_db = vector_db
         self.model = model
+        self.thinking = thinking
         self.top_k = top_k
         self.max_tokens = max_tokens
         self.min_score = min_score
@@ -192,7 +194,8 @@ class RAGQueryEngine:
             self._llm_provider = AnthropicProvider(
                 model=self.model,
                 client=self._client,
-                verbose=self.verbose
+                verbose=self.verbose,
+                thinking=self.thinking,
             )
         return self._llm_provider
 

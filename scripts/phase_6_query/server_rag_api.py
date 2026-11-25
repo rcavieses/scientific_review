@@ -16,8 +16,10 @@ from typing import Optional, List
 import json
 import logging
 import re
+import base64
+import secrets
 
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -48,6 +50,8 @@ class Source(BaseModel):
     text: Optional[str] = None
     doi: Optional[str] = None
     doi_url: Optional[str] = None
+    citation: Optional[str] = None
+    pdf_url: Optional[str] = None
 
 class QueryResponse(BaseModel):
     question: str
@@ -57,6 +61,8 @@ class QueryResponse(BaseModel):
     model: str
     execution_time_ms: float
     fishbase_data: Optional[str] = None
+    references: List[str] = []
+    fishbase: Optional[list] = None
 
 class IndexStats(BaseModel):
     total_chunks: int
@@ -96,11 +102,38 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Acceso protegido opcional: si RAG_PASSWORD está definida, todo exige HTTP Basic.
+# Las consultas gastan créditos de API, así que una instancia publicada con
+# ngrok debería arrancar con contraseña.
+RAG_USER = os.environ.get("RAG_USER", "rag")
+RAG_PASSWORD = os.environ.get("RAG_PASSWORD") or None
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if not RAG_PASSWORD:
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    if header.startswith("Basic "):
+        try:
+            user, _, password = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            user = password = ""
+        if secrets.compare_digest(user.encode(), RAG_USER.encode()) and \
+                secrets.compare_digest(password.encode(), RAG_PASSWORD.encode()):
+            return await call_next(request)
+    return Response(status_code=401, content="Acceso restringido",
+                    headers={"WWW-Authenticate": 'Basic realm="ATLANTIS RAG"'})
+
+
 # Variables globales (se cargan una vez)
 _db = None
 _engine = None
 _index_stats = None
 _fishbase_adapter = None
+_refs = {}
+_pdf_paths = {}
+PDF_ROOT = PROJECT_ROOT / "outputs" / "PDF_GOC"
 
 def init_rag_engine(index_dir: str = "outputs/rag_index_goc_full"):
     """Inicializa el motor RAG."""
@@ -181,13 +214,31 @@ def init_rag_engine(index_dir: str = "outputs/rag_index_goc_full"):
             table_bm25_index=table_bm25_index,
         )
 
-        # Intentar cargar FishBase
+        # FishBase: snapshot local en parquet (el adaptador web ya no existe)
         try:
-            from database_connectors import FishBaseAdapter
-            _fishbase_adapter = FishBaseAdapter(timeout=10, retry_delay=0.2)
-            logger.info("FishBase adapter cargado ✓")
+            import fishbase_local
+            if fishbase_local.disponible():
+                fishbase_local._cargar()
+                _fishbase_adapter = fishbase_local
+                logger.info("FishBase (snapshot local) cargado ✓")
+            else:
+                logger.warning("Snapshot de FishBase ausente en data/external/fishbase")
         except Exception as e:
             logger.warning(f"FishBase no disponible: {e}")
+
+        # Ruta del PDF original de cada paper (la guarda el metadata_store)
+        global _pdf_paths
+        _pdf_paths = {}
+        for rec in metadata_store.values():
+            if rec.get("source_pdf"):
+                _pdf_paths.setdefault(rec["paper_id"], rec["source_pdf"])
+
+        # Citas completas por paper (build_paper_references.py)
+        global _refs
+        ref_file = index_path / "paper_references.json"
+        _refs = json.loads(ref_file.read_text(encoding="utf-8")) if ref_file.exists() else {}
+        if not _refs:
+            logger.warning("Falta paper_references.json: ejecuta scripts/phase_6_query/build_paper_references.py")
 
         logger.info(f"RAG Engine inicializado: {_index_stats.total_chunks} chunks")
         return True
@@ -195,6 +246,44 @@ def init_rag_engine(index_dir: str = "outputs/rag_index_goc_full"):
     except Exception as e:
         logger.error(f"Error al inicializar RAG: {e}")
         return False
+
+def pdf_disponible(paper_id: str) -> Optional[Path]:
+    """PDF original del paper, sólo si existe y está dentro de PDF_GOC.
+
+    Se sirve únicamente con la instancia protegida por contraseña: los PDFs son
+    artículos de editoriales y una instancia abierta sería redistribuirlos.
+    """
+    if not RAG_PASSWORD:
+        return None
+    raw = _pdf_paths.get(paper_id)
+    if not raw:
+        return None
+    ruta = Path(raw).resolve()
+    if not str(ruta).startswith(str(PDF_ROOT.resolve())) or not ruta.exists():
+        return None
+    return ruta
+
+
+def pdf_link(paper_id: str, page=None) -> Optional[str]:
+    if not pdf_disponible(paper_id):
+        return None
+    from urllib.parse import quote
+    return f"/api/pdf/{quote(paper_id, safe='')}" + (f"#page={int(page)}" if page else "")
+
+
+@app.get("/api/pdf/{paper_id}")
+async def get_pdf(paper_id: str):
+    """PDF original, para abrirlo en la página citada (#page=N)."""
+    from fastapi.responses import FileResponse
+    ruta = pdf_disponible(paper_id)
+    if not ruta:
+        raise HTTPException(status_code=404, detail="PDF no disponible para este documento")
+    return FileResponse(ruta, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{ruta.name}"'})
+
+
+def fbs_citation() -> str:
+    return "Froese, R. & Pauly, D. (eds.) (2024). FishBase, versión v24.07. Publicación electrónica, www.fishbase.org."
 
 # ── Rutas de API ────────────────────────────────────────────────────────
 
@@ -236,110 +325,80 @@ async def query_rag(request: QueryRequest):
         # Consulta RAG
         result = _engine.query(request.question)
 
-        # FishBase: Consultar automáticamente si RAG tiene pocos resultados relevantes
+        # FishBase: parámetros de las especies nombradas en la pregunta
+        fishbase = None
         fishbase_data = None
-        fishbase_species = None
-        should_query_fishbase = False
-
-        # Determinar si se debe consultar FishBase
-        # 1. Si el usuario lo solicita explícitamente
-        # 2. Si RAG retornó pocos resultados o con baja relevancia
-        if _fishbase_adapter:
-            low_quality_results = (
-                request.include_fishbase or  # Usuario solicita explícitamente
-                len(result.sources) < 3 or  # Muy pocos resultados
-                (result.sources and result.sources[0].score < 0.5)  # Baja relevancia
-            )
-
-            if low_quality_results:
-                should_query_fishbase = True
-
-        if should_query_fishbase:
+        if _fishbase_adapter and request.include_fishbase:
             try:
-                import re
-
-                # Extraer nombres de especies de la pregunta
-                species_names = re.findall(r'\b([A-Z][a-z]+)\s+([a-z]+)\b', request.question)
-
-                if species_names:
-                    for genus, species_name in species_names[:2]:  # Máximo 2 especies
-                        species = f"{genus} {species_name}"
-
-                        try:
-                            # Intentar validar y obtener parámetros
-                            info = _fishbase_adapter.validate_species(species)
-                            if info:
-                                params = _fishbase_adapter.get_all_params(species, ecosystem="Gulf of California")
-                                if params and params.parameters:
-                                    fishbase_data = str(params.to_summary_dict())
-                                    fishbase_species = species
-                                    logger.info(f"✓ FishBase consultado para {species}: {len(params.parameters)} parámetros obtenidos")
-                                    break  # Encontró datos, salir del loop
-                        except Exception as e:
-                            logger.debug(f"FishBase: no pudo obtener {species}: {str(e)[:50]}")
-                            continue
-
+                contexto = result.answer + " " + " ".join((x.text or "") for x in result.sources)
+                fishbase = _fishbase_adapter.consultar(request.question, contexto) or None
+                if fishbase:
+                    fishbase_data = _fishbase_adapter.a_texto(fishbase)
             except Exception as e:
-                logger.warning(f"Error en búsqueda FishBase fallback: {e}")
+                logger.warning(f"Error consultando FishBase: {e}")
 
-        # Formatear respuesta
-        sources = []
+        # Fuentes y citas completas
+        sources, citas = [], {}
         for s in result.sources:
-            # Intentar obtener DOI: primero de metadatos, luego extraer del texto
             doi = s.doi or extract_doi_from_text(s.text)
-            doi_url = f"https://doi.org/{doi}" if doi else None
-
+            cita = (_refs.get(s.paper_id) or {}).get("cita")
+            if cita:
+                citas.setdefault(s.paper_id, cita)
+            else:
+                citas.setdefault(s.paper_id, None)
             sources.append(Source(
-                paper_id=s.paper_id,
-                authors=s.authors,
-                year=s.year,
-                score=s.score,
+                paper_id=s.paper_id, authors=s.authors, year=s.year, score=s.score,
                 page=s.page_number,
                 text=s.text[:300] if request.include_chunks and s.text else None,
-                doi=doi,
-                doi_url=doi_url,
+                doi=doi, doi_url=f"https://doi.org/{doi}" if doi else None,
+                citation=cita, pdf_url=pdf_link(s.paper_id, s.page_number),
             ))
 
-        # Si tenemos datos de FishBase, enriquecer la respuesta con ellos
+        # Integrar FishBase en la respuesta, distinguiendo cada fuente
         final_answer = result.answer
         if fishbase_data:
             try:
-                # Crear un prompt que enriquezca la respuesta con datos de FishBase
-                enrichment_prompt = f"""La respuesta anterior no contenía información suficiente.
-Aquí hay datos adicionales de FishBase para la especie {fishbase_species}:
-
-{fishbase_data}
-
-Por favor, enriquece tu respuesta anterior integrando estos datos de FishBase.
-Combina información de ambas fuentes (papers científicos + FishBase) en una respuesta coherente.
-Cita FishBase cuando uses sus datos."""
-
-                enrichment_message = f"""Pregunta original: {request.question}
-
-Datos de FishBase para {fishbase_species}:
-{fishbase_data}
-
-Respuesta anterior (basada en papers científicos):
-{result.answer}
-
----
-
-Por favor, crea una respuesta MEJORADA que integre TANTO los datos de los papers científicos COMO los datos de FishBase.
-Destaca claramente qué información viene de cada fuente.
-Usa el formato: [Fuente: FishBase] para datos de FishBase y [Autor et al., Año] para papers."""
-
-                enriched_response = _llm_provider.generate(
-                    system_prompt="Eres un asistente científico experto. Tu tarea es integrar información de múltiples fuentes (papers científicos y FishBase) para dar respuestas completas y precisas sobre especies marinas.",
-                    user_message=enrichment_message,
-                    max_tokens=1500,
-                )
-
-                if enriched_response and enriched_response.strip():
-                    final_answer = enriched_response
-                    logger.info(f"✓ Respuesta enriquecida con datos de FishBase ({fishbase_species})")
+                msg = (f"Pregunta original: {request.question}\n\n"
+                       f"Respuesta basada en papers del corpus:\n{result.answer}\n\n"
+                       f"Datos de FishBase (snapshot v24.07; mediana de los registros de la región "
+                       f"cuando existen):\n{fishbase_data}\n\n---\n"
+                       "Reescribe la respuesta integrando ambas fuentes. Indica claramente qué dato viene "
+                       "de FishBase ([FishBase]) y cuál de los papers (con su cita [Autor, Año]). "
+                       "No inventes valores ni cites nada que no esté arriba; si FishBase y los papers "
+                       "discrepan, di ambos valores. Si FishBase no aporta nada útil para la pregunta, "
+                       "deja la respuesta como está.")
+                enriched = _engine._get_llm_provider().generate(
+                    system_prompt="Eres un asistente científico experto en especies marinas del Golfo de California. "
+                                  "Integras papers y FishBase sin inventar datos.",
+                    user_message=msg, max_tokens=1800)
+                if enriched and enriched.strip():
+                    final_answer = enriched
             except Exception as e:
-                logger.warning(f"Error enriqueciendo respuesta con FishBase: {e}")
-                # Usar la respuesta original si hay error
+                logger.warning(f"Error integrando FishBase en la respuesta: {e}")
+
+        # Referencias completas al final de la respuesta
+        refs_list = []
+        mejor = {}
+        for src in sources:
+            if src.paper_id not in mejor or src.score > mejor[src.paper_id].score:
+                mejor[src.paper_id] = src
+        for pid, cita in citas.items():
+            txt = cita or f"{pid} — referencia completa no resuelta (archivo del corpus: {pid}.pdf)"
+            link = pdf_link(pid, mejor[pid].page)
+            if link:
+                txt += f" [📄 Abrir PDF original (p. {mejor[pid].page})]({link})" if mejor[pid].page else f" [📄 Abrir PDF original]({link})"
+            refs_list.append(txt)
+        fb_refs = []
+        if fishbase:
+            fb_refs.append(fbs_citation())
+            for d in fishbase:
+                for p in d["parametros"]:
+                    for c in p["citas"]:
+                        if c not in fb_refs:
+                            fb_refs.append(c)
+        refs_all = sorted(set(refs_list), key=str.lower) + fb_refs
+        if refs_all:
+            final_answer += "\n\n---\n### Referencias\n" + "\n".join(f"- {r}" for r in refs_all)
 
         elapsed = (time.time() - start) * 1000
 
@@ -351,6 +410,8 @@ Usa el formato: [Fuente: FishBase] para datos de FishBase y [Autor et al., Año]
             model=result.model,
             execution_time_ms=elapsed,
             fishbase_data=fishbase_data,
+            references=refs_all,
+            fishbase=fishbase,
         )
 
     except Exception as e:
@@ -654,7 +715,7 @@ HTML_INTERFACE = """
 
             <div class="results" id="results">
                 <div id="answer"></div>
-                <div id="fishbase"></div>
+                <div id="fishbase-results"></div>
                 <div id="sources"></div>
             </div>
         </div>
@@ -714,7 +775,7 @@ HTML_INTERFACE = """
 
         function displayResults(data) {
             // Respuesta - parse markdown
-            const parsedAnswer = marked.parse(data.answer);
+            const parsedAnswer = marked.parse(data.answer).replace(/<a href="\/api\/pdf/g, '<a target="_blank" rel="noopener" href="/api/pdf');
             const answerHtml = `
                 <div class="answer-box">
                     <strong>Respuesta:</strong> <span class="time-badge">${data.execution_time_ms.toFixed(0)}ms</span>
@@ -724,14 +785,15 @@ HTML_INTERFACE = """
             document.getElementById('answer').innerHTML = answerHtml;
 
             // FishBase
+            document.getElementById('fishbase-results').innerHTML = '';
             if (data.fishbase_data) {
                 const fishbaseHtml = `
                     <div class="fishbase-box">
                         <h4>🐟 Datos de FishBase</h4>
-                        <pre style="font-size: 0.9em; overflow-x: auto;">${data.fishbase_data}</pre>
+                        <div style="font-size:0.9em">${marked.parse(data.fishbase_data)}</div>
                     </div>
                 `;
-                document.getElementById('fishbase').innerHTML = fishbaseHtml;
+                document.getElementById('fishbase-results').innerHTML = fishbaseHtml;
             }
 
             // Fuentes
@@ -742,11 +804,12 @@ HTML_INTERFACE = """
                     const year = s.year ? ` (${s.year})` : '';
                     sourcesHtml += `
                         <div class="source">
-                            <div class="source-title">${s.paper_id}${year}</div>
+                            <div class="source-title">${s.citation ? s.citation : s.paper_id + year}</div>
                             <div class="source-meta">
                                 ${authors}
                                 <span class="source-score">${(s.score * 100).toFixed(0)}%</span>
                             </div>
+                            ${s.pdf_url ? `<div style="margin-top:6px"><a href="${s.pdf_url}" target="_blank" rel="noopener">📄 Abrir PDF original${s.page ? ' (p. ' + s.page + ')' : ''}</a></div>` : ''}
                             ${s.text ? `<div style="margin-top: 8px; font-size: 0.85em; color: #555;">${s.text}...</div>` : ''}
                         </div>
                     `;

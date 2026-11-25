@@ -45,6 +45,8 @@ EVIDENCE_SEARCH = "B6"
 EVIDENCE_CSV = DATA / "Atlantis_GOC_parametros_BUSQUEDA_6_detalle.csv"
 AI_SUGGESTIONS = OUT / "ai_suggestions.json"
 RECLASS_SUGGESTIONS = OUT / "reclass_suggestions.json"
+LW_SUGGESTIONS = OUT / "lw_suggestions.json"
+NBLM_SUGGESTIONS = OUT / "nblm_suggestions.json"
 
 # B5 partió de una copia del CSV de B4: sus coincidencias no son evidencia
 # independiente. Se marca para poder ponderar el consenso honestamente.
@@ -64,8 +66,17 @@ PARAMS = {
     # Bertalanffy coefficient a», que no existe: la ecuación tiene L∞, K y t0—,
     # así que cada corrida la resolvió a su manera. K vive sólo en growth_rate:
     # darle dos casas fue parte del enredo original.
-    "li_a":                {"label": "Peso-talla a (li_a)",     "unit": "",         "type": "num"},
-    "li_b":                {"label": "Peso-talla b (li_b)",     "unit": "",         "type": "num"},
+    # Se llaman «a» y «b» a secas: el nombre largo hacía que las dos columnas
+    # empezaran igual («Peso-talla …») y a golpe de vista fueran indistinguibles,
+    # que es justo el error que este esquema vino a deshacer. Lo que son se
+    # explica en `hint`, que la interfaz pone como título al pasar el cursor.
+    "li_a":                {"label": "a",                       "unit": "",         "type": "num",
+                            "hint": "Coeficiente a de la relación peso-talla W = a·L^b. "
+                                    "Depende de las unidades de W y L (típicamente 1e-6 a 1e-2). "
+                                    "No es un parámetro de von Bertalanffy."},
+    "li_b":                {"label": "b",                       "unit": "",         "type": "num",
+                            "hint": "Exponente b de la relación peso-talla W = a·L^b. "
+                                    "Adimensional, ronda 3. No es un parámetro de von Bertalanffy."},
     "vb_Linf":             {"label": "Talla asintótica (L∞)",   "unit": "cm",       "type": "num"},
     "vb_t0":               {"label": "Edad a talla cero (t₀)",  "unit": "años",     "type": "num"},
     "growth_rate":         {"label": "Tasa de crecimiento",     "unit": "1/año",    "type": "num"},
@@ -114,6 +125,31 @@ def load_reclass() -> dict[str, dict]:
     if not RECLASS_SUGGESTIONS.exists():
         return {}
     return json.loads(RECLASS_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
+
+
+def load_lw() -> dict[str, dict]:
+    """Coeficientes de peso-talla recuperados del corpus con cita textual.
+
+    Canal aparte de los demás: no es inferencia del modelo (como las sugerencias
+    taxonómicas) ni un reparto de columnas (como la reclasificación), sino
+    extracción dirigida sobre el mismo corpus, hecha después de corregir la
+    definición que las seis búsquedas recibieron mal. Ver lw_extract.py."""
+    if not LW_SUGGESTIONS.exists():
+        return {}
+    return json.loads(LW_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
+
+
+def load_nblm() -> dict[str, dict]:
+    """Valores que dos notebooks de NotebookLM afirman, ya reconciliados.
+
+    El canal más externo de todos: su corpus no vive en este repo y la respuesta
+    no es reproducible desde aquí. A cambio cubre literatura que el índice FAISS
+    no tiene. Cada sugerencia trae lo que dijo *cada* notebook por separado, y
+    marca si discrepan — que es justo lo que el revisor necesita ver.
+    Ver nblm_extract.py."""
+    if not NBLM_SUGGESTIONS.exists():
+        return {}
+    return json.loads(NBLM_SUGGESTIONS.read_text(encoding="utf-8")).get("suggestions", {})
 
 
 def load_searches() -> dict[str, pd.DataFrame]:
@@ -228,6 +264,8 @@ def build(tolerance: float) -> dict:
     evidence = load_evidence()
     ai = load_ai_suggestions()
     rec = load_reclass()
+    lw = load_lw()
+    nblm = load_nblm()
 
     items: list[dict] = []
     group_cells: defaultdict[str, Counter] = defaultdict(Counter)
@@ -241,6 +279,7 @@ def build(tolerance: float) -> dict:
                for col in TAXONOMY},
             "param": param,
             "param_label": meta["label"],
+            "param_hint": meta.get("hint"),
             "unit": meta["unit"],
             "kind": meta["type"],
             "critical_param": param in CRITICAL,
@@ -250,6 +289,8 @@ def build(tolerance: float) -> dict:
             "evidence_b6": evi,
             "ai_suggestion": ai.get(f"{idx}:{param}"),
             "reclass_suggestion": rec.get(f"{idx}:{param}"),
+            "lw_suggestion": lw.get(f"{idx}:{param}"),
+            "nblm_suggestion": nblm.get(f"{idx}:{param}"),
             # ¿Cada valor cae dentro del intervalo que la literatura reporta?
             # Es el discriminador más limpio cuando B6 trae rango.
             "inside_range": ({k: (rng[0] <= v <= rng[1]) for k, v in raw.items()}
@@ -319,6 +360,48 @@ def build(tolerance: float) -> dict:
                     "tie": False,
                     "suggested": sug["value"],
                     "suggested_method": f"inferencia taxonómica ({sug['scope']})",
+                })
+                items.append(item)
+                continue
+
+            if not raw and f"{idx}:{param}" in lw:
+                # Peso-talla extraído del corpus con cita. Entra a la cola porque
+                # una cita hay que leerla: el mismo emparejamiento difuso que
+                # puso una b de pez en un pato sigue siendo posible.
+                lws = lw[f"{idx}:{param}"]
+                sev = {"alta": "warning", "media": "serious", "baja": "critical"}[lws["confidence"]]
+                group_cells[group]["peso_talla"] += 1
+                group_cells[group][sev] += 1
+                item = base_item(idx, param, meta, raw, rng, evi)
+                item.update({
+                    "tipo": "peso_talla",
+                    "spread_pct": 0.0,
+                    "severity": sev,
+                    "tie": False,
+                    "suggested": lws["value"],
+                    "suggested_method": f"extracción dirigida ({lws['scope']})",
+                })
+                items.append(item)
+                continue
+
+            if not raw and f"{idx}:{param}" in nblm:
+                # Literatura que el índice FAISS no tiene, leída por NotebookLM.
+                # Entra a la cola siempre: la respuesta no se puede reproducir
+                # desde este repo, así que la única verificación posible es que
+                # un humano lea la cita. Cuando los dos notebooks discrepan, la
+                # confianza baja y el item sube al principio de la cola.
+                nbs = nblm[f"{idx}:{param}"]
+                sev = {"alta": "warning", "media": "serious", "baja": "critical"}[nbs["confidence"]]
+                group_cells[group]["notebooklm"] += 1
+                group_cells[group][sev] += 1
+                item = base_item(idx, param, meta, raw, rng, evi)
+                item.update({
+                    "tipo": "notebooklm",
+                    "spread_pct": 0.0,
+                    "severity": sev,
+                    "tie": bool(nbs.get("discrepancia")),
+                    "suggested": nbs["value"],
+                    "suggested_method": f"consulta a NotebookLM ({nbs['scope']})",
                 })
                 items.append(item)
                 continue
@@ -393,6 +476,8 @@ def build(tolerance: float) -> dict:
             "unsupported": counter["sin_respaldo"],
             "ai_suggested": counter["sugerencia_ia"],
             "reclasificado": counter["reclasificado"],
+            "peso_talla": counter["peso_talla"],
+            "notebooklm": counter["notebooklm"],
             "critical": counter["critical"],
             "serious": counter["serious"],
             "warning": counter["warning"],
@@ -422,6 +507,9 @@ def build(tolerance: float) -> dict:
                                     if (item.get("evidence_b6") or {}).get("quote")),
             "ai_suggestions": len(ai),
             "reclass_suggestions": len(rec),
+            "lw_suggestions": len(lw),
+            "nblm_suggestions": len(nblm),
+            "nblm_discrepancias": sum(1 for s in nblm.values() if s.get("discrepancia")),
             "ai_contradicts": sum(1 for item in items
                                   if item.get("ai_suggestion") and item["values"]
                                   and any(v != item["ai_suggestion"]["value"]

@@ -35,10 +35,12 @@ class AnthropicProvider(LLMProvider):
         model: str = "claude-sonnet-4-6",
         client=None,
         verbose: bool = False,
+        thinking: Optional[dict] = None,
     ):
         self.model = model
         self._client = client
         self.verbose = verbose
+        self.thinking = thinking
 
     def generate(
         self,
@@ -62,13 +64,22 @@ class AnthropicProvider(LLMProvider):
         """
         try:
             client = self._get_client()
+            kwargs = {}
+            if self.thinking is not None:
+                kwargs["thinking"] = self.thinking
             message = client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
+                **kwargs,
             )
-            return message.content[0].text
+            # Los modelos con thinking pueden devolver bloques 'thinking' antes
+            # del texto: tomar el primer bloque de texto en lugar de content[0].
+            for block in message.content:
+                if getattr(block, "type", None) == "text":
+                    return block.text
+            return ""
         except Exception as e:
             raise RuntimeError(f"Error al llamar a Claude API: {e}") from e
 

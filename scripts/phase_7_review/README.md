@@ -99,9 +99,9 @@ así que las cinco son compatibles y lo que parecía conflicto no lo es.
 5. **Decisión** — valor final, fuente (B1/B3/B4/B5, RAG, manual), revisor y
    comentario. Tres salidas: *Aceptar*, *Falta evidencia*, *Descartar celda*.
 
-## Los cuatro canales de la cola, y por qué están separados
+## Los seis canales de la cola, y por qué están separados
 
-La cola mezcla celdas de cuatro procedencias distintas. La interfaz las mantiene
+La cola mezcla celdas de seis procedencias distintas. La interfaz las mantiene
 distinguibles en todo momento —insignia propia, caja propia, descargo propio—
 porque el valor de este tablero está justamente en no confundirlas:
 
@@ -111,8 +111,51 @@ porque el valor de este tablero está justamente en no confundirlas:
 | `sin_respaldo` | Una búsqueda lo afirma y B6 no lo halló en el corpus | Si el valor existe en algún lado |
 | `sugerencia_ia` | **Inferencia taxonómica del modelo.** No sale de ningún registro | Que la cita sostenga la afirmación biológica |
 | `reclasificado` | **Valor que ya existía, en la columna equivocada.** No es dato nuevo | Que la cantidad sea la que dice el reparto |
+| `peso_talla` | **Extracción dirigida sobre el corpus**, con cita textual, tras corregir la definición de `li_a`/`li_b` | Que la cita sea de esta especie y traiga las unidades de W y L |
+| `notebooklm` | **Literatura que el índice FAISS no tiene**, leída por dos notebooks de NotebookLM y reconciliada entre ambos | Que la cita nombre un documento real, y —si los notebooks discrepan— cuál de los dos aplica al Golfo |
 
 FishBase **no** está en esta lista: tiene página propia. Ver más abajo.
+
+### Validación por respaldo regional de las sugerencias de IA
+
+El mismo criterio que se aplica a FishBase, sobre una cosa distinta. FishBase se
+valida cuando el registro **se midió** en la región; una sugerencia de IA no
+tiene medición, así que lo que se clasifica es **su cita**:
+
+    FishBase validado  →  «este valor se midió en el Golfo».
+    IA validada        →  «esta afirmación biológica la sostiene literatura del
+                           Golfo; el valor sigue siendo una inferencia
+                           taxonómica, no un dato medido».
+
+De ahí que salgan con estado propio, `validado_region_cita`, y no se mezclen
+con `validado_region`: quien quiera sólo mediciones filtra por estado y no se
+lleva ninguna de éstas.
+
+De las 45 referencias del catálogo de `ai_suggestions.py`, **21 son
+regionales** — 17 del Golfo (Thomson 2000, Hobson 1965/1968, Sala 2003,
+Nevárez 1999/2001, Erisman 2012, Rojas-Bracho 2006…), 1 del Pacífico mexicano
+y 3 del Pacífico oriental. Las otras 24 sostienen afirmaciones ciertas pero
+medidas en otra parte: Barbados, Nueva Zelanda, Hawái, Cuba, el Mar del Norte.
+
+```bash
+python3 scripts/phase_7_review/ai_autovalidate.py --citas     # qué cita es regional
+python3 scripts/phase_7_review/ai_autovalidate.py --dry-run
+python3 scripts/phase_7_review/ai_autovalidate.py --reviewer "R. Cavieses"
+python3 scripts/phase_7_review/ai_autovalidate.py --deshacer
+```
+
+**Las de confianza baja no entran.** Esas reglas avisan en su propio texto de
+que el campo es ambiguo para ese taxón: los mictófidos migran verticalmente y
+no entre zonas; las mobulas se agregan *dentro* del Golfo. Aprobarlas en lote
+sería contestar automáticamente justo la pregunta que la regla deja abierta.
+Son 6 celdas (Mobulidae, Dorosomatidae) y siguen pendientes; `--incluir-baja`
+las mete si se decide antes qué mide `IsMigratory`.
+
+Las 290 sin respaldo regional tampoco entran, y por una razón distinta: la
+afirmación puede ser perfectamente cierta —un gobio es sedentario en cualquier
+océano— pero la literatura que la sostiene no es de aquí. Quedan a revisión
+humana. Son sobre todo aves (Howell 1995 es una guía nacional, no regional),
+peces planos (Able 2014, Gibson 1994) y mesopelágicos (Sutton 2013).
 
 ### Cómo se generan
 
@@ -126,7 +169,16 @@ python3 scripts/phase_7_review/fishbase_suggestions.py --download
 # Valores numéricos de FishBase, con su referencia primaria
 python3 scripts/phase_7_review/fishbase_suggestions.py
 
-# Reconstruir la cola con ambos canales dentro
+# Peso-talla: recuperar li_a/li_b del corpus (ver más abajo)
+python3 scripts/phase_7_review/lw_extract.py --remap     # sobre el crudo ya guardado
+python3 scripts/phase_7_review/lw_extract.py --corpus    # consulta dirigida, sólo peces
+
+# NotebookLM: preguntar a los dos notebooks por las celdas que siguen vacías
+python3 scripts/phase_7_review/nblm_client.py --listar          # ids -> config
+python3 scripts/phase_7_review/nblm_extract.py --dry-run --limit 1
+python3 scripts/phase_7_review/nblm_extract.py
+
+# Reconstruir la cola con todos los canales dentro
 python3 scripts/phase_7_review/build_review_queue.py
 ```
 
@@ -155,6 +207,63 @@ Los ocho parámetros que cubre, y de qué tabla salen:
 Donde hay varios registros (varios stocks, sexos y localidades) se propone la
 mediana y se muestran el número de registros y el rango observado: un solo
 número escondería esa dispersión.
+
+### Validación por procedencia
+
+FishBase agrega estudios de todo el mundo. Para un modelo del Golfo de
+California, una K medida en el Mar del Norte y otra medida en Guaymas no valen
+lo mismo, aunque la tabla las liste juntas. De cada registro se lee de dónde
+salió (`fb_region.py`) y se clasifica en tres niveles:
+
+| Nivel | Qué incluye | Celdas |
+|---|---|---|
+| Golfo de California | golfo, Sonora, Sinaloa, Baja + golfo, Guaymas, Mazatlán… | 377 |
+| Pacífico mexicano | costa oeste de Baja, Colima, Nayarit, Guerrero, Tehuantepec… | 286 |
+| Pacífico oriental | corriente de California, Galápagos, Perú, Chile, Panamá… | 561 |
+
+Dos consecuencias, y la primera importa más que la segunda:
+
+1. **El valor cambia.** Si hay registros de la región, la mediana se calcula
+   sólo con ellos; la mundial se conserva aparte (`value_global`) para poder
+   comparar. Ejemplo real — *Istiophorus platypterus*: K mundial 0.29 sobre 13
+   registros, K del Golfo 0.752 sobre 1. Un valor que se va a aprobar como
+   validado para el Golfo tiene que salir del Golfo.
+2. **La celda se puede aprobar en lote**, sin ir al paper: la procedencia ya
+   contesta la pregunta que la revisión celda a celda tenía que contestar.
+   Salen al export con estado `validado_region`, distinto de
+   `revisado_fishbase`, y la nota lleva la localidad exacta.
+
+**La señal no siempre vale lo mismo.** «Localidad» es dónde se midió, y es
+prueba. «Referencia» es que la localidad está vacía y lo que casa es el título
+del estudio: un catálogo del Pacífico oriental puede citar una talla medida en
+cualquier parte, así que es indicio y **no entra en el aprobado por defecto**.
+Los tres parámetros de la tabla `species` (`Lmax`, `mean_body_size`, `max_age`)
+sólo se pueden clasificar así —esa tabla no guarda localidad—, de modo que en la
+práctica quedan siempre para revisión humana.
+
+Que FishBase no diga de dónde salió un dato no significa que venga de fuera de
+la región: esas celdas se quedan pendientes, exactamente como estaban.
+
+```bash
+# Ver qué haría, sin escribir nada
+python3 scripts/phase_7_review/fb_autovalidate.py --dry-run
+
+# Aprobar (744 celdas con localidad regional, de las 2 771 propuestas)
+python3 scripts/phase_7_review/fb_autovalidate.py --reviewer "R. Cavieses"
+
+# Sólo lo estrictamente local, o incluyendo el indicio por título
+python3 scripts/phase_7_review/fb_autovalidate.py --nivel golfo_california
+python3 scripts/phase_7_review/fb_autovalidate.py --incluir-referencia
+
+# Revertir en bloque: sólo lo que aprobó esta regla, no lo aceptado a mano
+python3 scripts/phase_7_review/fb_autovalidate.py --deshacer
+```
+
+Lo mismo se hace desde el tablero, con el botón de la página de FishBase; deja
+el mismo sello, así que revertirlo es una sola operación se haya hecho desde
+donde se haya hecho. En la tabla, cada celda regional lleva su marca —`GC`,
+`PM`, `PO`, punteada si es sólo indicio— y el tooltip trae la localidad, cuántos
+registros de la región sostienen el valor y cuál habría sido la mediana mundial.
 
 > **Aviso sobre `Von_bertalanffy_a/b`.** La columna del CSV base está usada hoy
 > con al menos tres convenciones incompatibles a la vez: hay valores que son L∞
@@ -217,6 +326,223 @@ machete, un blanquillo y **un pato**, intercambiándose los mismos cuatro
 números porque comparten el epíteto. Es la firma del emparejamiento difuso, y
 el script lo nombra explícitamente en cada celda afectada.
 
+## Los coeficientes de peso-talla: por qué hubo que reobtenerlos
+
+`li_a` y `li_b` salían **vacíos en el CSV consolidado: 0 valores de 1 122
+especies**. No porque el corpus no los tuviera, sino porque el paso 2 de la
+extracción no tenía dónde ponerlos: se le pidió «Von Bertalanffy coefficient
+a/b», que no significa nada, así que un exponente alométrico no encajaba en
+ningún campo y se tiraba.
+
+El crudo del paso 1 que B6 guardó lo demuestra especie por especie:
+
+| Especie | Lo que el corpus dice | Lo que el paso 2 guardó |
+|---|---|---|
+| *Triphoturus mexicanus* | `b = 2.79` | nada |
+| *Benthosema panamense* | `b = 2.09` | nada |
+| *Caulolatilus affinis* | `b = 2.66` | L∞ y K, sin la b |
+| *Holacanthus passer* | `b = 2.618` | `0.127`, que es K |
+| *Hoplopagrus guentherii* | `W = a × Lt^b`, n = 282 | nada |
+
+`lw_extract.py` los recupera en dos fases, ambas dirigidas **sólo** a peso-talla:
+
+| Fase | Qué hace | Coste |
+|---|---|---|
+| `--remap` | Vuelve a mapear los 37 crudos del paso 1 que B6 alcanzó a guardar, con la definición correcta. **No recupera nada del índice**: el texto ya estaba extraído | 37 llamadas, ~3 min |
+| `--corpus` | Una consulta por especie al índice, únicamente sobre W = a·L^b | ~800 llamadas, ~1 h |
+
+**Sólo peces.** `--corpus` filtra por `Class` a Teleostei, Actinopterygii y
+Chondrichthyes. W = a·L^b no aplica a aves ni mamíferos, y es justo ahí donde
+el emparejamiento difuso metió valores ajenos: *Aythya affinis* —un pato—
+heredó la `b = 2.66` de *Caulolatilus affinis* por compartir epíteto.
+
+### Las tres guardas, y por qué cada una
+
+1. **Rango de plausibilidad.** `b` fuera de 2–4.5 y `a` fuera de 1e-9–1 se
+   descartan con el motivo escrito. Aceptar callado un número que no puede ser
+   lo que dice ser es exactamente como `Von_bertalanffy_a` se llenó de L∞ y t₀.
+2. **Cita obligatoria.** Sin fragmento verbatim no hay sugerencia. Un valor sin
+   cita no se puede comprobar, y este canal existe precisamente para poder.
+3. **Comprobación de género.** Si la cita nombra el epíteto pero no el género,
+   la sugerencia baja a confianza **baja** y lo dice. En el re-mapeo esta guarda
+   ya funcionó: el modelo devolvió `null` para *Aythya affinis* con la nota
+   «all data are for *Caulolatilus*».
+
+Nada de esto se escribe en ningún CSV. Salen a
+`outputs/review/lw_suggestions.json` y entran a la cola como canal
+`peso_talla`, porque una cita hay que leerla.
+
+### Lo que el barrido encontró, y lo que eso significa
+
+Corridas las dos fases —37 re-mapeos y 783 consultas al corpus, una por pez—:
+
+| | li_a | li_b |
+|---|---:|---:|
+| Recuperado del corpus | **0** | **7** |
+| Propuesto por FishBase | 425 | 420 |
+
+Las siete: *Benthosema panamense* 2.09, *Brotula sp.* 3.1591, *Caulolatilus
+affinis* 2.66, *Eucinostomus dowii* 3.69, *Holacanthus passer* 2.618,
+*Stereolepis gigas* 3.08, *Triphoturus mexicanus* 2.79. Cinco salieron del
+re-mapeo —estaban ya extraídas y el paso 2 las tiró— y sólo dos del barrido
+completo del corpus.
+
+**Cero valores de `a` en 1 122 especies.** No es un fallo de la extracción esta
+vez: los papers del corpus reportan la relación de forma cualitativa
+(«crecimiento alométrico positivo»), publican la `b` de vez en cuando y la `a`
+prácticamente nunca. Esa asimetría es real en la literatura pesquera regional.
+
+La consecuencia para el modelo es directa: **`li_a` sólo puede venir de
+FishBase**. La pregunta ya no es «¿lo dice el corpus?» sino si se acepta la
+relación longitud–peso curada de FishBase, que es una decisión de la página de
+FishBase, no de la cola.
+
+> **La «a» sin unidades no sirve.** `a` depende de si W va en g o kg y L en cm o
+> mm: el mismo pez tiene una `a` mil veces distinta según eso. Cuando el paper
+> no las declara, la sugerencia lo dice en su justificación y hay que
+> resolverlo antes de aceptar.
+
+**Cuando el corpus y FishBase proponen el mismo parámetro, manda el corpus.**
+FishBase da la mediana mundial de `poplw`; la cita es de un paper del Golfo, que
+es el sistema que se está modelando. Ninguna de las dos se escribe hasta que
+alguien acepta — lo que cambia es cuál se muestra pendiente.
+
+## NotebookLM: el canal cuyo corpus no está en el repositorio
+
+Hay literatura —informes técnicos, literatura gris, capítulos nunca digitalizados
+como PDF del corpus— que el índice FAISS no tiene y que sí está cargada en dos
+notebooks de NotebookLM. Este canal la pone frente al revisor.
+
+### Lo que se investigó antes de escribirlo
+
+A septiembre de 2026 **NotebookLM no tiene API pública**:
+
+| Vía | ¿Permite preguntar a *tus* notebooks? |
+|---|---|
+| NotebookLM consumidor, API oficial | **No existe.** Google la anuncia «en camino», sin beta ni fecha |
+| Gemini Notebook Enterprise, API oficial | Sólo CRUD de notebooks y audio: **no hay endpoint de consulta**. Además exige Google Cloud con licencia |
+| Discovery Engine `answer` (Vertex AI Search) | Sí, con citas — pero sobre un Data Store, no sobre el notebook: obliga a resubir los documentos |
+| `notebooklm-py` (no oficial) | **Sí.** Es la única vía desde una cuenta personal |
+
+Se eligió la última, con los ojos abiertos: habla APIs internas de Google usando
+las cookies de tu sesión y puede dejar de funcionar sin aviso. Toda esa
+fragilidad está encerrada en `nblm_client.py`; si Google cambia sus endpoints,
+se arregla un archivo.
+
+### La deuda que este canal tiene y los demás no
+
+Una respuesta de NotebookLM **no es reproducible desde este repositorio**. El
+corpus del notebook no está versionado aquí, así que nadie puede volver a
+ejecutar la consulta y obtener lo mismo. Eso lo distingue de todos los demás
+canales, y se maneja con tres decisiones:
+
+1. **El crudo se guarda siempre.** `outputs/review/nblm_extractions.jsonl`
+   conserva la respuesta íntegra, las citas y el parseo de cada consulta. Ése,
+   y no la conexión, es el activo que perdura: si la librería se rompe mañana,
+   el JSONL sigue siendo evidencia auditable.
+2. **Un valor sin cita textual se descarta.** Y si la cita no se puede resolver
+   a un documento concreto, el valor se emite pero baja de confianza y la
+   tarjeta lo dice: «sin fuente identificada» es una afirmación del asistente,
+   no un dato de la literatura.
+3. **El export lo deja por escrito.** El estado propio es
+   `revisado_notebooklm`, y la nota lleva el alcance, los documentos citados y
+   —si aplica— que los notebooks discrepaban.
+
+### Por qué dos notebooks, y qué se gana
+
+No se concatenan: se pregunta a cada uno por separado y se reconcilian. La
+concordancia entre dos corpus independientes es la señal de confianza más barata
+que existe, y la discrepancia es información que un promedio habría escondido.
+
+| Situación | Confianza | Severidad en la cola |
+|---|---|---|
+| Ambos responden y coinciden (≤ `--tolerancia`, def. 15 %) | alta | `warning` |
+| Sólo uno responde | media | `serious` |
+| Responden y discrepan | **baja** | `critical` |
+| Ninguno responde | — | descarte, con su motivo |
+
+Como el tablero ordena por severidad, **las discrepancias suben solas al
+principio de la cola**. La tarjeta muestra siempre los dos valores con su frase
+y su documento: lo que el revisor decide no es un número, es cuál de las dos
+fuentes aplica al Golfo de California.
+
+### Dos pasos por especie
+
+1. **Pregunta en prosa a NotebookLM**, una por (especie, notebook), pidiendo de
+   golpe todos los parámetros que ese notebook declara cubrir en
+   `config/notebooklm.json`. NotebookLM aterriza mejor en prosa que forzado a
+   JSON, y agrupar por especie en vez de por celda reduce el gasto de cuota unas
+   cinco veces.
+2. **Parseo de esa prosa a JSON con Claude**, con un system prompt que prohíbe
+   aportar conocimiento propio y exige la frase literal. Es el mismo patrón de
+   dos pasos que usa `lw_extract.py`.
+
+`params_covered` no es decorativo: preguntarle a un notebook por un parámetro
+que no cubre gasta cuota y produce respuestas educadas sin respaldo.
+
+### Puesta en marcha
+
+```bash
+pip install "notebooklm-py[browser]"
+notebooklm login
+
+cp config/notebooklm.example.json config/notebooklm.json
+python3 scripts/phase_7_review/nblm_client.py --listar   # ids -> config
+
+# Prueba de un tiro, sin escribir nada: imprime pregunta, respuesta y parseo
+python3 scripts/phase_7_review/nblm_extract.py --dry-run --limit 1
+
+python3 scripts/phase_7_review/nblm_extract.py --limit 10 --group "Peces demersales"
+python3 scripts/phase_7_review/nblm_extract.py
+python3 scripts/phase_7_review/nblm_extract.py --informe
+```
+
+La corrida es **reanudable**: el JSONL guarda una línea por (especie, notebook),
+así que una interrupción no obliga a regastar. Y respeta la invariante de todos
+los canales automáticos: **una celda que un humano ya aceptó o rechazó no se
+vuelve a proponer**.
+
+### Si NotebookLM resultara valioso y estable
+
+El paso siguiente natural sería **exportar los documentos de los dos notebooks e
+indexarlos en el índice FAISS/BM25 existente**. Eso elimina la dependencia de la
+API no oficial y devuelve la reproducibilidad, a cambio del trabajo de ingesta.
+El JSONL crudo de este canal es justo lo que hace falta para decidir si vale la
+pena.
+
+## La página de «Todos los parámetros»
+
+Las otras vistas miran una celda a la vez: son para **decidir**. Esta es para
+**ver** — `#m`, o «Todos los parámetros →» en la portada.
+
+Una fila por especie, una columna por cada uno de los 16 parámetros, y el
+estado de procedencia en el color de fondo. Responde de un vistazo la pregunta
+que el modelador se hace antes de alimentar Atlantis: *¿de dónde salió cada
+número, y cuánto falta?*
+
+| Color | Estado |
+|---|---|
+| Verde | `acuerdo` — dos o más búsquedas coinciden |
+| Azul | `revisado*` — alguien lo decidió, con la fuente que sea |
+| Ámbar | `sin_corroborar` — una sola búsqueda |
+| Naranja | `conflicto_pendiente` — discrepan, consenso provisional |
+| Rojo | `sin_respaldo_b6` — otras lo afirman, B6 no lo halló |
+| Gris, cursiva, entre paréntesis | Propuesta sin aceptar: **no está en el CSV** |
+
+La tabla se calcula con la **misma `consolidate()`** que escribe el CSV, no con
+una lectura paralela: lo que se ve es lo que se exportaría al pulsar «Exportar
+CSV» ahora mismo. No puede desincronizarse porque no es un resumen aparte.
+
+Las propuestas en gris se apagan con una casilla. Encendidas miden la cobertura
+que el modelo ganaría si alguien revisara la cola: hoy **510 celdas con dato
+frente a 3 440 propuestas pendientes**, casi todas de FishBase. Apagadas se ve
+lo que el dataset tiene de verdad.
+
+Grupo y especie quedan fijos al desplazarse —a la mitad del scroll, si no, ya no
+se sabe de qué especie es el número que se mira— y el grupo es un enlace a su
+cola de revisión. El tooltip de cada celda lleva el estado, qué búsquedas la
+aportaron, el revisor y la nota de procedencia.
+
 ## La página de FishBase
 
 FishBase vive fuera de la cola de revisión, en `#fb`. No es una separación
@@ -258,8 +584,15 @@ cinco celdas así, de Ricardo y CRNT.
 |---|---|
 | `build_review_queue.py` | Construye la cola comparando los CSV y fusionando los dos canales de sugerencia |
 | `ai_suggestions.py` | Sugerencias taxonómicas de IsMigratory, con cita verificable |
+| `ai_autovalidate.py` | Aprueba las sugerencias de IA cuya cita es de la región |
 | `fishbase_suggestions.py` | Descarga el snapshot de FishBase y emite sugerencias numéricas |
+| `fb_region.py` | Clasifica una procedencia —localidad o cita— en Golfo / Pacífico mexicano / Pacífico oriental |
+| `fb_autovalidate.py` | Aprueba las celdas de FishBase medidas en la región |
 | `reclassify_vb.py` | Reparte Von_bertalanffy_a/b al esquema nuevo, para revisión |
+| `lw_extract.py` | Recupera li_a/li_b del corpus, con cita textual y tres guardas |
+| `nblm_client.py` | Fachada sobre `notebooklm-py`: toda la fragilidad de la API no oficial vive aquí |
+| `nblm_extract.py` | Pregunta a los dos notebooks y reconcilia sus respuestas en sugerencias |
+| `config/notebooklm.json` | Ids y alcance de cada notebook (local, fuera de git; plantilla en `.example.json`) |
 | `review_server.py` | API FastAPI + servidor estático |
 | `static/` | Interfaz (HTML/CSS/JS sin dependencias) |
 | `outputs/review/review_queue.json` | La cola (regenerable) |
@@ -268,6 +601,10 @@ cinco celdas así, de Ricardo y CRNT.
 | `outputs/review/ai_suggestions.json` | Sugerencias taxonómicas (regenerable) |
 | `outputs/review/fishbase_suggestions.json` | Sugerencias de FishBase (regenerable) |
 | `outputs/review/reclass_suggestions.json` | Reparto de esquema (regenerable) |
+| `outputs/review/lw_suggestions.json` | Peso-talla extraído del corpus (regenerable) |
+| `outputs/review/lw_extractions.jsonl` | Crudo de cada consulta de peso-talla, con o sin hallazgo |
+| `outputs/review/nblm_suggestions.json` | Sugerencias de NotebookLM, reconciliadas (regenerable) |
+| `outputs/review/nblm_extractions.jsonl` | Crudo de cada consulta a NotebookLM: respuesta íntegra, citas y parseo |
 | `data/external/fishbase/*.parquet` | Snapshot de FishBase, fuera de git (regenerable con `--download`) |
 | `outputs/review/Atlantis_GOC_parametros_consolidado.csv` | Export: mismo esquema de 24 columnas que las búsquedas |
 | `outputs/review/Atlantis_GOC_procedencia.csv` | Export: una fila por celda con estado, nº de búsquedas, dispersión y revisor |
@@ -285,8 +622,11 @@ El botón **Exportar CSV** fusiona las cuatro búsquedas aplicando las decisione
 | `sin_respaldo_b6` | otras búsquedas lo afirman, B6 no halló evidencia; el valor se conserva marcado |
 | `revisado_fuente_externa` | el revisor lo respaldó con una fuente ajena al corpus (columna `reference`) |
 | `revisado_fishbase` | aceptado en la página de FishBase |
+| `validado_region` | **medido en la región**: el registro de FishBase trae localidad del Golfo, el Pacífico mexicano o el Pacífico oriental, y el valor se calculó sólo con esos registros |
+| `validado_region_cita` | **inferencia con respaldo regional**: sugerencia de IA cuya cita es literatura del Golfo o del Pacífico mexicano. El valor no está medido |
 | `fishbase_pendiente` / `fishbase_rechazado` | propuesto y sin aceptar; **la celda queda vacía** |
 | `revisado_reclasificacion` | el revisor confirmó el reparto de columna |
+| `revisado_peso_talla` | el revisor confirmó un li_a/li_b extraído del corpus |
 | `*_pendiente` | hay una sugerencia sin revisar; **la celda queda vacía a propósito** |
 
 ## Notas técnicas

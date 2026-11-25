@@ -438,6 +438,59 @@ details.fold > summary:hover { color: var(--accent); }
   border-color: color-mix(in srgb, #e0a640 28%, var(--border));
 }
 
+/* Peso-talla: verde azulado, para no confundirlo ni con la inferencia de IA
+   (violeta) ni con el reparto de esquema (ámbar). Aquí sí hay dato nuevo —un
+   número que estaba en los papers— y la distinción importa al revisarlo. */
+.badge.lw { color: #0a6b62; border-color: color-mix(in srgb, #0a6b62 40%, var(--border)); }
+:root[data-theme="dark"] .badge.lw,
+:root:not([data-theme="light"]) .badge.lw { color: #4fc3b5; }
+
+.lw-box {
+  background: color-mix(in srgb, #0a6b62 6%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #0a6b62 32%, var(--border));
+  border-radius: 8px; padding: 12px;
+}
+:root[data-theme="dark"] .lw-box,
+:root:not([data-theme="light"]) .lw-box {
+  background: color-mix(in srgb, #4fc3b5 8%, var(--surface-1));
+  border-color: color-mix(in srgb, #4fc3b5 28%, var(--border));
+}
+
+/* NotebookLM. Color propio y más frío que el de peso-talla: es el único canal
+   cuyo corpus no vive en este repositorio, y conviene que se distinga de un
+   vistazo de los que sí se pueden reproducir. */
+.badge.nb { color: #5a4bbf; border-color: color-mix(in srgb, #5a4bbf 40%, var(--border)); }
+:root[data-theme="dark"] .badge.nb,
+:root:not([data-theme="light"]) .badge.nb { color: #a99bf5; }
+
+.nb-box {
+  background: color-mix(in srgb, #5a4bbf 6%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #5a4bbf 32%, var(--border));
+  border-radius: 8px; padding: 12px;
+}
+:root[data-theme="dark"] .nb-box,
+:root:not([data-theme="light"]) .nb-box {
+  background: color-mix(in srgb, #a99bf5 8%, var(--surface-1));
+  border-color: color-mix(in srgb, #a99bf5 28%, var(--border));
+}
+
+/* Un bloque por notebook: los dos valores se leen por separado, que es de lo
+   que trata este canal. */
+.nb-src {
+  border-left: 3px solid color-mix(in srgb, #5a4bbf 45%, var(--border));
+  padding: 6px 0 6px 10px;
+}
+:root[data-theme="dark"] .nb-src,
+:root:not([data-theme="light"]) .nb-src {
+  border-left-color: color-mix(in srgb, #a99bf5 45%, var(--border));
+}
+.nb-alias {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: #5a4bbf;
+}
+:root[data-theme="dark"] .nb-alias,
+:root:not([data-theme="light"]) .nb-alias { color: #a99bf5; }
+
 .conf {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--border); text-transform: none; letter-spacing: 0;
@@ -492,6 +545,30 @@ details.fold > summary:hover { color: var(--accent); }
 .fbval.conf-baja { color: var(--warn, #8a5a00); }
 .nrec { font-size: 10px; color: var(--text-muted); margin-left: 2px; }
 
+/* Procedencia. Tres tonos del mismo color, no tres colores: son el mismo tipo
+   de respaldo a distinta distancia del sistema modelado, y leerlos como una
+   escala es justo lo que hay que hacer al decidir. */
+.reg {
+  display: inline-block; margin-left: 4px; font-size: 9px; font-weight: 700;
+  letter-spacing: .03em; padding: 1px 4px; border-radius: 4px; vertical-align: 2px;
+  border: 1px solid transparent;
+}
+.reg-golfo_california  { background: color-mix(in srgb, var(--good) 26%, transparent); color: var(--good); }
+.reg-pacifico_mexicano { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.reg-pacifico_oriental { background: color-mix(in srgb, var(--good) 8%, transparent);  color: var(--text-secondary); }
+/* Clasificada por el título del estudio, no por una localidad medida: es
+   indicio, y se dibuja como tal —contorno punteado, sin relleno. */
+.reg.weak { background: transparent; border-style: dotted; border-color: var(--text-muted); color: var(--text-muted); }
+
+.badge.region { color: var(--good); }
+
+.region-panel {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--good) 7%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, var(--good) 30%, var(--border));
+  border-radius: 8px; padding: 12px 14px; margin: 16px 0;
+}
+
 .fbtable td.ok { background: color-mix(in srgb, var(--good) 12%, transparent); }
 .fbtable td.no { opacity: .45; text-decoration: line-through; }
 
@@ -512,3 +589,54 @@ details.fold > summary:hover { color: var(--accent); }
    alguien tomó mirando la evidencia es exactamente lo que no debe poder pasar. */
 .fbtable td.lock { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-secondary); }
 .lockicon { font-size: 9px; margin-left: 3px; opacity: .7; }
+
+/* ── página de todos los parámetros ─────────────────────────────────── */
+/* 1 122 especies × 16 parámetros no cabe en una pantalla ni debe intentarlo:
+   la tabla desborda dentro de su caja, con la cabecera y las dos primeras
+   columnas —grupo y especie— fijas. Sin ellas, a la mitad del scroll ya no se
+   sabe de qué especie es el número que se está mirando. */
+.mx-wrap { max-height: calc(100vh - 300px); overflow: auto; }
+
+.mxtable td, .mxtable th { padding: 7px 10px; }
+.mxtable tbody td.num { font-weight: 500; }
+
+.mxtable .mx-sticky { position: sticky; z-index: 1; background: var(--surface-1); }
+.mxtable thead .mx-sticky { z-index: 3; }
+.mxtable .mx-g {
+  left: 0; box-sizing: border-box;
+  width: 160px; min-width: 160px; max-width: 160px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.mxtable .mx-s { left: 160px; box-shadow: 1px 0 0 var(--border); }
+
+.linkish {
+  border: 0; background: none; padding: 0; font: inherit; cursor: pointer;
+  color: var(--text-secondary); text-align: left;
+}
+.linkish:hover { color: var(--accent); text-decoration: underline; background: none; }
+
+.mx-chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.mx-chk input { margin: 0; }
+
+.mx-leyenda { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 12px; font-size: 12px;
+              color: var(--text-secondary); }
+.mx-lg { display: inline-flex; align-items: center; gap: 6px; }
+.mx-sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border);
+         display: inline-block; }
+
+/* El color dice de dónde salió el número, que es la pregunta previa a usarlo.
+   Se tiñe el fondo, no el texto: con dieciséis columnas de cifras, colorear la
+   tipografía hace la tabla ilegible antes de hacerla informativa. */
+.st-ok    { background: color-mix(in srgb, var(--good) 14%, transparent); }
+.st-rev   { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.st-solo  { background: color-mix(in srgb, var(--warning) 16%, transparent); }
+.st-confl { background: color-mix(in srgb, var(--serious) 20%, transparent); }
+.st-norsp { background: color-mix(in srgb, var(--critical) 14%, transparent); }
+.st-vacia { color: var(--text-muted); }
+/* Propuesta sin aceptar: no está en el CSV, y la tabla no debe insinuar que sí.
+   Va en gris, en cursiva y entre paréntesis — se lee como lo que es, una
+   promesa de cobertura pendiente de que alguien mire la evidencia. */
+.st-pend  { color: var(--text-muted); font-style: italic; font-weight: 400 !important; }
+
+.mx-sw.st-pend { background: var(--surface-3); }
+.mx-sw.st-vacia { background: var(--surface-3); }
